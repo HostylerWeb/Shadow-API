@@ -1,0 +1,35 @@
+{
+  "connector_id": "carrier_x_pod",
+  "connector_version": "1.0.1",
+  "graph_version": "v1.0.1-g2",
+  "auth_mode": "optional_session",
+  "artifact_handling": "store_and_sign",
+  "not_found_is_success": true,
+  "inputs": {
+    "tracking_number": { "type": "string", "required": true },
+    "include_pod_document": { "type": "boolean", "required": false },
+    "destination_zip": { "type": "string", "required": false }
+  },
+  "outputs": {
+    "status": { "enum": ["NOT_FOUND", "IN_TRANSIT", "EXCEPTION", "DELIVERED"] },
+    "signed_by": { "type": "string" },
+    "document_url": { "type": "string", "signed": true }
+  },
+  "preflight": {
+    "destination_zip_required_when": {
+      "include_pod_document": true,
+      "session_id_absent": true
+    }
+  },
+  "cache": {
+    "key_fields": ["tracking_number", "include_pod_document", "session_generation"],
+    "ttl_by_status_seconds": {
+      "DELIVERED": 86400,
+      "IN_TRANSIT": 300,
+      "EXCEPTION": 300,
+      "NOT_FOUND": 60
+    },
+    "never_cache_fields": ["document_url"]
+  },
+  "failure_codes": ["VALIDATION_ERROR", "CHALLENGE_REQUIRED", "ARTIFACT_GATE_FAILED", "SESSION_EXPIRED", "GRAPH_STEP_FAILED"]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "in_transit",
+  "inputs": { "tracking_number": "IT1", "include_pod_document": true, "destination_zip": "10001" },
+  "html": "<html><body>In transit</body></html>",
+  "har": [{ "url": "https://carrier.example/api/track", "status": 200 }],
+  "status": "IN_TRANSIT"
+}

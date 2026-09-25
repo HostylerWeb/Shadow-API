@@ -1,0 +1,7 @@
+{
+  "name": "delivered_zip_gate",
+  "inputs": { "tracking_number": "DZ1", "include_pod_document": true, "destination_zip": "10001" },
+  "html": "<html><body>Delivered</body></html>",
+  "har": [{ "url": "https://carrier.example/api/v1/pod/stream", "status": 200 }],
+  "status": "DELIVERED"
+}

@@ -1,0 +1,120 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ShadowAPI",
+    "version": "1.0.0",
+    "description": "Async job API for portal connectors. See docs/API-FAILURES.md for failure body examples."
+  },
+  "servers": [{ "url": "http://localhost:3000" }],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Gateway health",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "summary": "OpenAPI document (this spec)",
+        "responses": {
+          "200": {
+            "description": "OpenAPI JSON"
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "summary": "Start a job",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["connector_id"],
+                "properties": {
+                  "connector_id": { "type": "string" },
+                  "connector_version": { "type": "string" },
+                  "inputs": { "type": "object", "additionalProperties": true },
+                  "run_mode": { "type": "string", "enum": ["live", "cached"] },
+                  "session_id": { "type": "string" },
+                  "idempotency_key": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Job accepted" },
+          "400": { "description": "VALIDATION_ERROR" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "summary": "Poll job status",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "Job status" },
+          "404": { "description": "Not found for this tenant" }
+        }
+      },
+      "delete": {
+        "summary": "Cancel job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "Cancelled or already terminal" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/v1/jobs/{id}/result": {
+      "get": {
+        "summary": "Fetch job outputs when ready",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "Outputs" },
+          "409": { "description": "Result not ready" }
+        }
+      }
+    },
+    "/v1/connectors": {
+      "get": {
+        "summary": "Connector catalog",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Allowed connectors" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key as Bearer token"
+      }
+    },
+    "schemas": {
+      "Failure": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}

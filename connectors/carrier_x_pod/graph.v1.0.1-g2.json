@@ -1,0 +1,15 @@
+{
+  "graph_version": "v1.0.1-g2",
+  "steps": [
+    { "id": "preconditions", "type": "preflight" },
+    { "id": "navigate", "type": "navigate", "url": "https://carrier.example/tracking" },
+    { "id": "antibot_landing", "type": "antibot" },
+    { "id": "fill", "type": "fill", "selector": "#tracking-input", "field": "tracking_number" },
+    { "id": "submit", "type": "click", "selector": "#submit-btn" },
+    { "id": "antibot_after_submit", "type": "antibot" },
+    { "id": "branch_status", "type": "extract_status" },
+    { "id": "gated_artifact", "type": "pod_gate" },
+    { "id": "blob", "type": "store_and_sign" },
+    { "id": "complete", "type": "complete" }
+  ]
+}

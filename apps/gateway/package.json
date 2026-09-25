@@ -1,0 +1,28 @@
+{
+  "name": "@shadowapi/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@shadowapi/core": "workspace:*",
+    "@shadowapi/db": "workspace:*",
+    "@shadowapi/graph-runner": "workspace:*",
+    "bullmq": "latest",
+    "drizzle-orm": "latest",
+    "fastify": "latest",
+    "ioredis": "latest"
+  },
+  "devDependencies": {
+    "@shadowapi/db": "workspace:*",
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

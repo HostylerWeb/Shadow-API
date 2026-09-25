@@ -1,0 +1,11 @@
+{
+  "graph_version": "1.0.0",
+  "success_enums": ["NOT_FOUND", "DELIVERED", "IN_TRANSIT"],
+  "steps": [
+    { "id": "open", "type": "navigate", "url": "https://example.test/tracking", "timeout_ms": 5000 },
+    { "id": "fill", "type": "fill", "field": "tracking_number", "timeout_ms": 5000 },
+    { "id": "submit", "type": "click", "timeout_ms": 5000 },
+    { "id": "after", "type": "branch", "patterns": ["P1", "P2", "P3"], "then": "extract", "timeout_ms": 5000 },
+    { "id": "extract", "type": "extract", "timeout_ms": 5000 }
+  ]
+}

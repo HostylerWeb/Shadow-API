@@ -1,0 +1,7 @@
+{
+  "name": "not_found_timeline",
+  "inputs": { "tracking_number": "NF1", "include_pod_document": false },
+  "html": "<html><body><p id=\"error-message\">No tracking information found</p></body></html>",
+  "har": [{ "url": "https://carrier.example/api/track", "status": 200 }],
+  "status": "NOT_FOUND"
+}

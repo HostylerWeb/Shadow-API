@@ -1,0 +1,7 @@
+{
+  "name": "exception",
+  "inputs": { "tracking_number": "EX1", "include_pod_document": false },
+  "html": "<html><body>Exception</body></html>",
+  "har": [{ "url": "https://carrier.example/api/track", "status": 200 }],
+  "status": "EXCEPTION"
+}

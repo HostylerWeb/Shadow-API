@@ -1,0 +1,31 @@
+{
+  "$id": "https://shadowapi.local/schemas/connector-manifest.json",
+  "type": "object",
+  "required": [
+    "connector_id",
+    "connector_version",
+    "graph_version",
+    "auth_mode",
+    "artifact_handling",
+    "not_found_is_success",
+    "inputs",
+    "outputs",
+    "preflight",
+    "cache",
+    "failure_codes"
+  ],
+  "properties": {
+    "connector_id": { "const": "carrier_x_pod" },
+    "connector_version": { "type": "string" },
+    "graph_version": { "const": "v1.0.1-g2" },
+    "auth_mode": { "const": "optional_session" },
+    "artifact_handling": { "const": "store_and_sign" },
+    "not_found_is_success": { "const": true },
+    "inputs": { "type": "object" },
+    "outputs": { "type": "object" },
+    "preflight": { "type": "object" },
+    "cache": { "type": "object" },
+    "failure_codes": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,8 @@
+{
+  "name": "delivered_no_doc",
+  "inputs": { "tracking_number": "DN1", "include_pod_document": false },
+  "html": "<html><body>Delivered</body></html>",
+  "har": [{ "url": "https://carrier.example/api/track", "status": 200 }],
+  "status": "DELIVERED",
+  "signed_by": "A. Receiver"
+}

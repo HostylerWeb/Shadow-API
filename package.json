@@ -1,0 +1,30 @@
+{
+  "name": "shadowapi",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/eslint-parser": "^7.29.9",
+    "@babel/preset-typescript": "^7.29.7",
+    "@eslint/js": "^9.39.5",
+    "@types/node": "latest",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "db:migrate": "pnpm --filter @shadowapi/db run db:migrate",
+    "db:seed": "pnpm --filter @shadowapi/db run db:seed",
+    "dev:infra": "docker compose up -d",
+    "dev:infra:down": "docker compose down",
+    "dev:gateway": "pnpm --filter @shadowapi/gateway dev",
+    "dev:worker": "pnpm --filter @shadowapi/worker dev",
+    "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build",
+    "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run typecheck",
+    "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/gateway --filter @shadowapi/worker run test",
+    "lint": "eslint ."
+  }
+}

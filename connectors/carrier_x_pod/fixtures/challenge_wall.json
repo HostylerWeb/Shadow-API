@@ -1,0 +1,7 @@
+{
+  "name": "challenge_wall",
+  "inputs": { "tracking_number": "CH1", "include_pod_document": false },
+  "html": "<html><body>captcha</body></html>",
+  "har": [],
+  "challenge": true
+}

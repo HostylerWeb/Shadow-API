@@ -1,0 +1,9 @@
+{
+  "name": "delivered_vault_session",
+  "inputs": { "tracking_number": "DV1", "include_pod_document": true },
+  "session_id": "sess-1",
+  "session_generation": 2,
+  "html": "<html><body>Delivered</body></html>",
+  "har": [{ "url": "https://carrier.example/api/v1/pod/stream", "status": 200 }],
+  "status": "DELIVERED"
+}
