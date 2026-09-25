@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { after, before, describe, test } from "node:test";
+import { after, before, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { Redis } from "ioredis";
 import { stubCacheKey, encryptVault, decryptVault } from "@shadowapi/core";
