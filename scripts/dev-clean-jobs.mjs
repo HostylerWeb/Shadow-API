@@ -3,8 +3,7 @@
  * Dev-only: clear stuck queued/running jobs so tests and TENANT_CONCURRENCY stay usable.
  * Requires DATABASE_URL in the environment.
  */
-import { createDb } from "@shadowapi/db";
-import { sql } from "drizzle-orm";
+import { spawnSync } from "node:child_process";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -12,15 +11,17 @@ if (!url) {
   process.exit(1);
 }
 
-const { db, close } = createDb(url);
-const running = await db.execute(sql`
-  UPDATE jobs SET status = 'failed', failure_code = 'GRAPH_STEP_FAILED',
-    failure_message = 'dev cleanup (stuck running)', updated_at = NOW(), completed_at = NOW()
-  WHERE status = 'running'
-`);
-const queued = await db.execute(sql`
-  UPDATE jobs SET status = 'cancelled', updated_at = NOW(), completed_at = NOW()
-  WHERE status = 'queued'
-`);
+const sql = `
+UPDATE jobs SET status = 'failed', failure_code = 'GRAPH_STEP_FAILED',
+  failure_message = 'dev cleanup (stuck running)', updated_at = NOW(), completed_at = NOW()
+WHERE status = 'running';
+UPDATE jobs SET status = 'cancelled', updated_at = NOW(), completed_at = NOW()
+WHERE status = 'queued';
+`;
+
+const result = spawnSync("psql", [url, "-c", sql], { encoding: "utf8" });
+if (result.status !== 0) {
+  console.error(result.stderr || result.stdout);
+  process.exit(result.status ?? 1);
+}
 console.log("dev-clean-jobs: cleared running and queued job rows");
-await close();
