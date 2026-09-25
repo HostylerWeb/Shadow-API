@@ -24,6 +24,12 @@ export type CarrierManifest = {
     ttl_by_status_seconds: Record<string, number>;
     never_cache_fields: string[];
   };
+  session_lock_mode?: "exclusive" | "read_shared" | "none";
+  runtime_profile?: {
+    proxy_mode: "datacenter_then_residential";
+    datacenter_proxy_env: string;
+    residential_proxy_env: string;
+  };
 };
 
 export type CarrierFixture = {

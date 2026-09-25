@@ -9,10 +9,13 @@ import {
   stubCacheKey,
   type JobStatus,
 } from "@shadowapi/core";
-import { preflightCarrier } from "@shadowapi/graph-runner";
+import { carrierCacheKey, disallowedInputUrl, preflightCarrier, targetDomainsFor } from "@shadowapi/graph-runner";
 import type { Db } from "@shadowapi/db";
 import { connectorVersions, jobs, usageEvents, vaultSessions } from "@shadowapi/db/schema";
 import type { AuthContext } from "../auth.js";
+import { signedDocumentUrl } from "../sign-document.js";
+import { overLiveCap, rateLimited } from "../quota.js";
+import type { Redis } from "ioredis";
 export type EnqueueJob = (jobId: string, tenantId: string) => Promise<void>;
 export type CacheGet = (key: string) => Promise<string | null>;
 
@@ -28,7 +31,7 @@ type StartJobBody = {
 export function registerJobRoutes(
   app: FastifyInstance,
   db: Db,
-  options: { enqueue?: EnqueueJob; cacheGet?: CacheGet } = {},
+  options: { enqueue?: EnqueueJob; cacheGet?: CacheGet; redis?: Redis } = {},
 ) {
   const enqueue =
     options.enqueue ??
@@ -38,6 +41,27 @@ export function registerJobRoutes(
   app.post<{ Body: StartJobBody }>("/v1/jobs", async (request, reply) => {
     const auth = request.auth as AuthContext;
     const body = request.body ?? {};
+    const allowed = new Set([
+      "connector_id",
+      "connector_version",
+      "inputs",
+      "run_mode",
+      "session_id",
+      "idempotency_key",
+    ]);
+    const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+    if (unknown.length > 0) {
+      return reply.code(400).send({
+        failure: { code: "VALIDATION_ERROR", message: `Unknown field: ${unknown.join(", ")}` },
+      });
+    }
+
+    const rawBody = body as StartJobBody & { cookies?: unknown; storage_state?: unknown; storageState?: unknown };
+    if (rawBody.cookies !== undefined || rawBody.storage_state !== undefined || rawBody.storageState !== undefined) {
+      return reply.code(400).send({
+        failure: { code: "VALIDATION_ERROR", message: "Pass session_id only; cookies are not accepted" },
+      });
+    }
 
     if (!body.connector_id || typeof body.connector_id !== "string") {
       return reply.code(400).send({
@@ -53,6 +77,12 @@ export function registerJobRoutes(
           failure: { code: "VALIDATION_ERROR", message: preflightError },
         });
       }
+    }
+    const domainError = disallowedInputUrl(body.inputs ?? {}, targetDomainsFor(body.connector_id));
+    if (domainError) {
+      return reply.code(400).send({
+        failure: { code: "VALIDATION_ERROR", message: domainError },
+      });
     }
     if (runMode !== "live" && runMode !== "cached") {
       return reply.code(400).send({
@@ -119,6 +149,18 @@ export function registerJobRoutes(
       }
     }
 
+    if (options.redis && (await rateLimited(options.redis, auth.apiKeyId, body.connector_id))) {
+      return reply.code(429).send({
+        failure: { code: "RATE_LIMITED", message: "Too many requests" },
+      });
+    }
+
+    if (runMode === "live" && (await overLiveCap(db, auth.tenantId))) {
+      return reply.code(429).send({
+        failure: { code: "RATE_LIMITED", message: "Live quota exceeded" },
+      });
+    }
+
     const connectors = await db
       .select()
       .from(connectorVersions)
@@ -131,7 +173,9 @@ export function registerJobRoutes(
     const inputs = body.inputs ?? {};
 
     if (runMode === "cached") {
-      const raw = options.cacheGet ? await options.cacheGet(stubCacheKey(body.connector_id, inputs)) : null;
+      const cacheKey =
+        body.connector_id === "carrier_x_pod" ? carrierCacheKey(inputs) : stubCacheKey(body.connector_id, inputs);
+      const raw = options.cacheGet ? await options.cacheGet(cacheKey) : null;
       if (!raw) {
         return reply.code(404).send({
           failure: { code: "VALIDATION_ERROR", message: "Cache miss" },
@@ -161,6 +205,7 @@ export function registerJobRoutes(
         connectorId: body.connector_id,
         kind: "cached_read",
       });
+      if (options.redis) await options.redis.incr("metrics:cache_hits");
       return reply.code(200).send({
         job_id: cachedJob.id,
         status: cachedJob.status,
@@ -198,6 +243,7 @@ export function registerJobRoutes(
   });
 
   app.get<{ Params: { id: string } }>("/v1/jobs/:id", async (request, reply) => {
+    const started = Date.now();
     const auth = request.auth as AuthContext;
     const rows = await db
       .select()
@@ -209,6 +255,10 @@ export function registerJobRoutes(
       return reply.code(404).send({ failure: { code: "VALIDATION_ERROR", message: "Job not found" } });
     }
 
+    if (options.redis) {
+      await options.redis.lpush("metrics:poll_ms", String(Date.now() - started));
+      await options.redis.ltrim("metrics:poll_ms", 0, 99);
+    }
     return {
       job_id: job.id,
       status: job.status,
@@ -236,7 +286,11 @@ export function registerJobRoutes(
         status: job.status,
       });
     }
-    return { job_id: job.id, status: job.status, outputs: job.outputs ?? {} };
+    const outputs = { ...((job.outputs ?? {}) as Record<string, unknown>) };
+    if (typeof outputs.document_blob_id === "string") {
+      outputs.document_url = await signedDocumentUrl(outputs.document_blob_id);
+    }
+    return { job_id: job.id, status: job.status, outputs };
   });
 
   app.delete<{ Params: { id: string } }>("/v1/jobs/:id", async (request, reply) => {
@@ -259,6 +313,9 @@ export function registerJobRoutes(
       .set({ status: "cancelled", updatedAt: new Date(), completedAt: new Date() })
       .where(eq(jobs.id, job.id))
       .returning();
+    if (options.redis && job.sessionId) {
+      await options.redis.del(`lock:${job.tenantId}:${job.connectorId}:${job.sessionId}`);
+    }
     return { job_id: updated.id, status: updated.status };
   });
 }

@@ -1,0 +1,9 @@
+{
+  "graph_version": "v1.0.0-g1",
+  "success_enums": ["RECEIVED", "NOT_FOUND"],
+  "steps": [
+    { "id": "open", "type": "navigate", "url": "https://staging.local/receipt" },
+    { "id": "after", "type": "branch", "patterns": ["P2"], "then": "extract" },
+    { "id": "extract", "type": "extract" }
+  ]
+}

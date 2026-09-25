@@ -37,7 +37,7 @@ Requirements: **Node 22+**, **pnpm** (latest), **Docker** for Postgres, Redis, a
 ```bash
 cp .env.example .env
 pnpm install
-pnpm dev:infra          # postgres :5433, redis :6380, minio :9000 (host ports)
+pnpm dev:infra          # postgres :5436, redis :6382, minio :9000 (host ports)
 pnpm db:migrate         # apply schema (Chapter 2)
 pnpm db:seed            # dev tenant + API key (print once)
 pnpm dev:gateway        # http://localhost:3000/health
@@ -66,6 +66,7 @@ Camoufox (browser engine): [docs/CAMOUFOX.md](./docs/CAMOUFOX.md) — worker int
 | Full technical spec (includes decided stack) | [docs/PROJECT.md](./docs/PROJECT.md) |
 | A-to-Z build checklist | [docs/ROADMAP.md](./docs/ROADMAP.md) |
 | Chapter completion snapshot | [docs/PROGRESS.md](./docs/PROGRESS.md) |
+| Local dev server (this machine) | [docs/DEV-SERVER.md](./docs/DEV-SERVER.md) |
 | API failure body examples | [docs/API-FAILURES.md](./docs/API-FAILURES.md) |
 | Camoufox engine guide | [docs/CAMOUFOX.md](./docs/CAMOUFOX.md) |
 | Connector manifest system | [PROJECT.md §9](./docs/PROJECT.md#9-connector-manifest-system) |

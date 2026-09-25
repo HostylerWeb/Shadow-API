@@ -1,0 +1,23 @@
+{
+  "connector_id": "warehouse_x_receipt",
+  "connector_version": "1.0.0",
+  "graph_version": "v1.0.0-g1",
+  "auth_mode": "none",
+  "artifact_handling": "none",
+  "not_found_is_success": true,
+  "inputs": {
+    "receipt_id": { "type": "string", "required": true }
+  },
+  "outputs": {
+    "status": { "enum": ["RECEIVED", "NOT_FOUND"] }
+  },
+  "preflight": {},
+  "cache": {
+    "key_fields": ["receipt_id"],
+    "ttl_by_status_seconds": { "RECEIVED": 300, "NOT_FOUND": 60 },
+    "never_cache_fields": []
+  },
+  "failure_codes": ["VALIDATION_ERROR", "GRAPH_STEP_FAILED"],
+  "target_domains": ["staging.local"],
+  "pii_fields": ["receipt_id"]
+}

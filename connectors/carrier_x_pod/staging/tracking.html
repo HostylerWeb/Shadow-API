@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <body>
+    <form>
+      <input id="tracking-input" name="tracking" />
+      <button id="submit-btn" type="button">Track</button>
+    </form>
+    <div id="status" hidden></div>
+    <div id="challenge" hidden>challenge wall</div>
+    <a id="pod" hidden href="/pod.bin">pod</a>
+    <div id="gate-failed" hidden>bad zip</div>
+    <script>
+      document.cookie = "ran=1; path=/";
+      document.getElementById("submit-btn").addEventListener("click", () => {
+        const value = document.getElementById("tracking-input").value;
+        if (value === "CHALLENGE") {
+          document.getElementById("challenge").hidden = false;
+          return;
+        }
+        if (value === "SLOW") return;
+        if (value === "BAD_ZIP") {
+          document.getElementById("gate-failed").hidden = false;
+          return;
+        }
+        const status = document.getElementById("status");
+        status.textContent = value === "DELIVERED" ? "DELIVERED" : "IN_TRANSIT";
+        status.hidden = false;
+        if (value === "DELIVERED") document.getElementById("pod").hidden = false;
+      });
+    </script>
+  </body>
+</html>

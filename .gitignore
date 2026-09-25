@@ -1,6 +1,7 @@
 .venv-camoufox/
 node_modules/
 dist/
+.next/
 .env
 .env.*
 !.env.example

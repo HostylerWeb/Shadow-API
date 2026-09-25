@@ -1,0 +1,7 @@
+{
+  "name": "bad_zip",
+  "inputs": { "tracking_number": "BZ1", "include_pod_document": true, "destination_zip": "00000" },
+  "html": "<html><body>gate</body></html>",
+  "har": [],
+  "bad_zip": true
+}

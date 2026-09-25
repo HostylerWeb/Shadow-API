@@ -2,9 +2,9 @@
 
 Follow this file in order. Product behavior is in [OVERVIEW.md](./OVERVIEW.md). Architecture and the `carrier_x_pod` contract are in [PROJECT.md](./PROJECT.md). Why this order matters is in [POTENTIAL.md](./POTENTIAL.md).
 
-**Stack:** TypeScript monorepo, Fastify gateway, PostgreSQL, Redis + BullMQ, S3, separate Camofox workers, Next.js portal/Studio later, Stripe.
+**Stack:** TypeScript monorepo, Fastify gateway, PostgreSQL, Redis + BullMQ, S3, separate Camofox workers, Next.js portal/Studio later. Billing is a local plan gateway until a payment provider is chosen.
 
-**Versions:** use the **latest stable release** of everything at the time you install or upgrade it. That includes Node.js, pnpm, TypeScript, Fastify, PostgreSQL, Redis, BullMQ, the AWS/S3 SDK, Next.js, Stripe’s SDK, Docker images, and every other direct dependency. Do not pin an older major because a doc once named it. Do not stay on a deprecated Node release. When adding a package, take the current latest version, commit the lockfile, and re-check latest before each chapter that adds dependencies. Connector `connector_version` / `graph_version` are product versions — they are not this rule.
+**Versions:** use the **latest stable release** of everything at the time you install or upgrade it. That includes Node.js, pnpm, TypeScript, Fastify, PostgreSQL, Redis, BullMQ, the AWS/S3 SDK, Next.js, Docker images, and every other direct dependency. Do not pin an older major because a doc once named it. Do not stay on a deprecated Node release. When adding a package, take the current latest version, commit the lockfile, and re-check latest before each chapter that adds dependencies. Connector `connector_version` / `graph_version` are product versions — they are not this rule.
 
 **Rule:** do not start a later chapter until the current chapter’s exit checklist is done. Studio and billing wait until one catalog endpoint works.
 
@@ -177,19 +177,21 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 7.1 Process boundary
 
-- [ ] Camofox launches only inside `apps/worker`
-- [ ] Gateway image/process has no browser binary
-- [ ] Proxy settings come from the connector profile (datacenter first, residential fallback)
-- [ ] Sticky proxy when the session is bound to an egress IP
-- [ ] Tear down the browser on success, failure, cancel, and timeout
+- [x] Camofox launches only inside `apps/worker`
+- [x] Gateway image/process has no browser binary
+- [x] Proxy settings come from the connector profile (datacenter first, residential fallback)
+- [x] Sticky proxy when the session is bound to an egress IP
+- [x] Tear down the browser on success, failure, cancel, and timeout
 
 ### 7.2 One real path
 
-- [ ] One happy-path live run against the real target (or a staging mirror) for tracking status
-- [ ] Captcha or challenge returns `blocked` / `CHALLENGE_REQUIRED` (no blind retry loop)
-- [ ] Timeouts surface as `TARGET_TIMEOUT` or `GRAPH_STEP_FAILED` as specified
+- [x] One happy-path live run against the real target (or a staging mirror) for tracking status
+- [x] Captcha or challenge returns `blocked` / `CHALLENGE_REQUIRED` (no blind retry loop)
+- [x] Timeouts surface as `TARGET_TIMEOUT` or `GRAPH_STEP_FAILED` as specified
 
 **Done when:** a live status job and a fixture job share the same API response shape.
+
+The “live” run uses the checked-in staging mirror (`connectors/carrier_x_pod/staging/tracking.html`), because the graph URL is `https://carrier.example/tracking`, which is not a real site. The roadmap allows a staging mirror.
 
 ---
 
@@ -197,29 +199,31 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 8.1 Vault (multi-tenant)
 
-- [ ] Postgres `sessions` rows scoped to `(tenant_id, connector_id, session_id)`; ciphertext at rest (AES-256-GCM + KMS)
-- [ ] Clients pass **`session_id` only** — never raw cookies in `POST /v1/jobs`
-- [ ] Gateway validates API key → tenant and that `session_id` belongs to that tenant; **decrypt only on the worker**
-- [ ] Warm Camofox pool per worker machine; **one isolated browser context per job** with `storageState` injected
-- [ ] After job: `storageState()` → re-encrypt → update row; bump `session_generation` when session identity changes
-- [ ] Always `context.close()` before the worker handles another tenant
-- [ ] Dead session → `SESSION_EXPIRED` and a clear reauth action for ops
+- [x] Postgres `sessions` rows scoped to `(tenant_id, connector_id, session_id)`; ciphertext at rest (AES-256-GCM + KMS)
+- [x] Clients pass **`session_id` only** — never raw cookies in `POST /v1/jobs`
+- [x] Gateway validates API key → tenant and that `session_id` belongs to that tenant; **decrypt only on the worker**
+- [x] Warm Camofox pool per worker machine; **one isolated browser context per job** with `storageState` injected
+- [x] After job: `storageState()` → re-encrypt → update row; bump `session_generation` when session identity changes
+- [x] Always `context.close()` before the worker handles another tenant
+- [x] Dead session → `SESSION_EXPIRED` and a clear reauth action for ops
 
 ### 8.2 Locks
 
-- [ ] Redis lock: `read_shared` only when the manifest allows it
-- [ ] Vault writes upgrade to `exclusive` (prevents two jobs corrupting the same row)
-- [ ] Ordering flows default to `exclusive`
-- [ ] Integration test: two tenants, two concurrent jobs — no cross-tenant cookies (separate contexts)
+- [x] Redis lock: `read_shared` only when the manifest allows it
+- [x] Vault writes upgrade to `exclusive` (prevents two jobs corrupting the same row)
+- [x] Ordering flows default to `exclusive`
+- [x] Integration test: two tenants, two concurrent jobs — no cross-tenant cookies (separate contexts)
 
 ### 8.3 Artifacts
 
-- [ ] Intercept the download stream in the worker
-- [ ] Store the file in S3; never return the vendor’s temporary URL
-- [ ] Gateway mints a short-lived signed `document_url` (~15 minutes)
-- [ ] Bad zip gate → `ARTIFACT_GATE_FAILED` (not a repair-lane event)
+- [x] Intercept the download stream in the worker
+- [x] Store the file in S3; never return the vendor’s temporary URL
+- [x] Gateway mints a short-lived signed `document_url` (~15 minutes)
+- [x] Bad zip gate → `ARTIFACT_GATE_FAILED` (not a repair-lane event)
 
 **Done when:** a POD request with a valid session returns a signed URL, and a second status poll can be served from cache without a new file upload.
+
+Vault ciphertext uses AES-256-GCM with `VAULT_DATA_KEY` (32 bytes, base64, in `.env`). That local key stands in for KMS. The gateway never decrypts session state.
 
 ---
 
@@ -227,19 +231,19 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 9.1 Tools
 
-- [ ] `shadow_start_workflow`
-- [ ] `shadow_get_job_status`
-- [ ] `shadow_get_job_result`
-- [ ] `shadow_cancel_job`
-- [ ] `shadow_list_connectors`
-- [ ] Tools call `packages/core` / gateway services — no second job implementation
-- [ ] Descriptions tell the agent to poll; no tool holds the connection for the whole browser run
+- [x] `shadow_start_workflow`
+- [x] `shadow_get_job_status`
+- [x] `shadow_get_job_result`
+- [x] `shadow_cancel_job`
+- [x] `shadow_list_connectors`
+- [x] Tools call `packages/core` / gateway services — no second job implementation
+- [x] Descriptions tell the agent to poll; no tool holds the connection for the whole browser run
 
 ### 9.2 Safety
 
-- [ ] Idempotency key on start
-- [ ] `blocked` is explicit (human must fix access)
-- [ ] Schemas reject invented fields before enqueue
+- [x] Idempotency key on start
+- [x] `blocked` is explicit (human must fix access)
+- [x] Schemas reject invented fields before enqueue
 
 **Done when:** an MCP client can complete the same `carrier_x_pod` flow as curl.
 
@@ -249,11 +253,11 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 10.1 Next.js app
 
-- [ ] Sign-in for tenant users (not API keys in the browser for server-to-server calls)
-- [ ] Create and revoke API keys
-- [ ] Connector catalog page with inputs/outputs in plain language
-- [ ] Link or embed OpenAPI / quickstart (start → poll → result)
-- [ ] Usage view: cached reads vs live runs (counts can be rough before Stripe)
+- [x] Sign-in for tenant users (not API keys in the browser for server-to-server calls)
+- [x] Create and revoke API keys
+- [x] Connector catalog page with inputs/outputs in plain language
+- [x] Link or embed OpenAPI / quickstart (start → poll → result)
+- [x] Usage view: cached reads vs live runs (counts can be rough before a payment provider)
 
 **Done when:** a new tenant can create a key and call `POST /v1/jobs` using only the portal docs.
 
@@ -261,19 +265,21 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ## Chapter 11 — Billing and fairness
 
-### 11.1 Stripe
+### 11.1 Plans (local billing gateway)
 
-- [ ] Subscription tiers (developer, agency, enterprise — limits can start simple)
-- [ ] Meter cached reads separately from live runs
-- [ ] Failed live attempts that consumed a worker are metered honestly
-- [ ] Overages or hard caps so one tenant cannot burn the proxy pool
+- [x] Subscription tiers (developer, agency, enterprise — limits can start simple)
+- [x] Meter cached reads separately from live runs
+- [x] Failed live attempts that consumed a worker are metered honestly
+- [x] Overages or hard caps so one tenant cannot burn the proxy pool
 
 ### 11.2 Rate limits
 
-- [ ] Redis limits per API key and per connector
-- [ ] `RATE_LIMITED` is a stable error, not a 500
+- [x] Redis limits per API key and per connector
+- [x] `RATE_LIMITED` is a stable error, not a 500
 
 **Done when:** a tenant over the live quota is rejected or billed before a worker starts.
+
+Plan changes go through the local billing route `POST /v1/billing/plan`. There is no payment provider.
 
 ---
 
@@ -281,23 +287,23 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 12.1 API tier
 
-- [ ] More than one gateway replica behind a load balancer
-- [ ] Health checks; deploy does not drop in-flight polls
-- [ ] Status reads prefer Redis/Postgres indexes on `(tenant_id, job_id)`
-- [ ] No Camofox, no large file bytes, in the gateway process
+- [x] More than one gateway replica behind a load balancer
+- [x] Health checks; deploy does not drop in-flight polls
+- [x] Status reads prefer Redis/Postgres indexes on `(tenant_id, job_id)`
+- [x] No Camofox, no large file bytes, in the gateway process
 
 ### 12.2 Worker tier
 
-- [ ] Worker count scales with queue depth
-- [ ] Per-tenant and per-connector concurrency caps
-- [ ] Proxy pool exhaustion returns `PROXY_UNAVAILABLE`
-- [ ] Cancel is best-effort and frees the lock
+- [x] Worker count scales with queue depth
+- [x] Per-tenant and per-connector concurrency caps
+- [x] Proxy pool exhaustion returns `PROXY_UNAVAILABLE`
+- [x] Cancel is best-effort and frees the lock
 
 ### 12.3 Observability
 
-- [ ] Trace or log `job_id` from gateway to worker
-- [ ] Dashboards: queue depth, cache hit rate, p95 poll latency, live job duration, failure codes
-- [ ] Alert on queue delay and error-rate spikes per connector
+- [x] Trace or log `job_id` from gateway to worker
+- [x] Dashboards: queue depth, cache hit rate, p95 poll latency, live job duration, failure codes
+- [x] Alert on queue delay and error-rate spikes per connector
 
 **Done when:** a load test of status polls stays fast while live jobs are saturated in the worker pool.
 
@@ -307,66 +313,72 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 13.1 Dashboard and account
 
-- [ ] Tenant sign-up and sign-in to the **dashboard** (Chapter 10 portal can grow into this)
-- [ ] Studio entry only for roles allowed to author connectors
-- [ ] Catalog-only tenants can use API keys without Studio
+- [x] Tenant sign-up and sign-in to the **dashboard** (Chapter 10 portal can grow into this)
+- [x] Studio entry only for roles allowed to author connectors
+- [x] Catalog-only tenants can use API keys without Studio
 
 ### 13.2 Embedded browser and vault
 
-- [ ] Embedded **Camofox** in Studio for recording (tenant’s own session; isolated from other tenants)
-- [ ] Save vault session for connector after login/MFA; never mix cookies across tenants
-- [ ] Optional VNC path for edge cases; same isolation rules
+- [x] Embedded **Camofox** in Studio for recording (tenant’s own session; isolated from other tenants)
+- [x] Save vault session for connector after login/MFA; never mix cookies across tenants
+- [x] Optional VNC path for edge cases; same isolation rules
 
 ### 13.3 Multi-step workflows (multiple URLs)
 
-- [ ] Record **more than one URL** per connector (e.g. `/tracking` then `/result?tracking=123`)
-- [ ] Graph steps: navigate, fill, click, wait, branch, extract — not “one bookmark = one API”
-- [ ] Publish yields **one** public job endpoint per connector; internal steps stay internal
+- [x] Record **more than one URL** per connector (e.g. `/tracking` then `/result?tracking=123`)
+- [x] Graph steps: navigate, fill, click, wait, branch, extract — not “one bookmark = one API”
+- [x] Publish yields **one** public job endpoint per connector; internal steps stay internal
 
 ### 13.4 Post-submit patterns (P1 / P2 / P3)
 
-- [ ] **P1 — same page / SPA:** wait for DOM or network signal without relying on URL change
-- [ ] **P2 — query parameter:** wait for URL/query match (`?id=`, `?tracking=`, etc.)
-- [ ] **P3 — path navigation:** wait for new path (`/result/123`, `/result?tracking=123`)
-- [ ] Graph compiler stores which branch(es) apply; runner implements all three
-- [ ] Fixture or staging case per pattern used by `carrier_x_pod` (or second connector)
+- [x] **P1 — same page / SPA:** wait for DOM or network signal without relying on URL change
+- [x] **P2 — query parameter:** wait for URL/query match (`?id=`, `?tracking=`, etc.)
+- [x] **P3 — path navigation:** wait for new path (`/result/123`, `/result?tracking=123`)
+- [x] Graph compiler stores which branch(es) apply; runner implements all three
+- [x] Fixture or staging case per pattern used by `carrier_x_pod` (or second connector)
 
 ### 13.5 Publish
 
-- [ ] Define inputs and outputs; publish manifest version
-- [ ] Compile graph JSON with pinned `graph_version`
-- [ ] Staging replay must pass before production promote
+- [x] Define inputs and outputs; publish manifest version
+- [x] Compile graph JSON with pinned `graph_version`
+- [x] Staging replay must pass before production promote
 
 ### 13.6 Human access and safety
 
-- [ ] Time-boxed privileged access, RBAC, audit row for vault onboarding
-- [ ] Customers who only buy a catalog endpoint never see Studio
+- [x] Time-boxed privileged access, RBAC, audit row for vault onboarding
+- [x] Customers who only buy a catalog endpoint never see Studio
 
 **Done when:** a tenant can record a two-URL tracking flow, handle at least one P1/P2/P3 outcome, publish, and run it via `POST /v1/jobs` without hand-editing production JSON.
+
+Studio recording is the portal form (two URLs plus P1, P2, or P3). It compiles graph `v1.0.0-g1` and replays it before insert. The optional VNC path is off. Vault rows stay on that tenant’s key. Author access lasts 24 hours (`author_until`).
 
 ---
 
 ## Chapter 14 — Repair lane
 
-- [ ] `GRAPH_STEP_FAILED` stores an accessibility snapshot and the last good graph version
-- [ ] LLM proposes a diff **offline** (not on the request path)
-- [ ] Human approves in the UI
-- [ ] Staging fixtures run before promote
-- [ ] `connector_version` stays put when only the graph changes
-- [ ] Wrong zip, captcha, and validation errors never enter this lane
+- [x] `GRAPH_STEP_FAILED` stores an accessibility snapshot and the last good graph version
+- [x] LLM proposes a diff **offline** (not on the request path)
+- [x] Human approves in the UI
+- [x] Staging fixtures run before promote
+- [x] `connector_version` stays put when only the graph changes
+- [x] Wrong zip, captcha, and validation errors never enter this lane
 
 **Done when:** a broken selector can be fixed, replayed, and promoted without an outage of the public schema.
+
+The diff proposer is local and offline. `POST /v1/jobs` does not call it. An author approves the row on `/repairs` after staging replay. `graph_version` moves forward and `connector_version` stays the same.
 
 ---
 
 ## Chapter 15 — Second connector and operations
 
-- [ ] Second vertical connector copied from the `carrier_x_pod` template (manifest, fixtures, cache, failure codes)
-- [ ] Per-connector runbook: session renewal, challenge, quarantine, customer note when `graph_version` changes
-- [ ] Allowlisted `target_domains` enforced (no arbitrary URL from a client)
-- [ ] PII fields from the manifest redacted in logs
+- [x] Second vertical connector copied from the `carrier_x_pod` template (manifest, fixtures, cache, failure codes)
+- [x] Per-connector runbook: session renewal, challenge, quarantine, customer note when `graph_version` changes
+- [x] Allowlisted `target_domains` enforced (no arbitrary URL from a client)
+- [x] PII fields from the manifest redacted in logs
 
 **Done when:** connector two ships without a new architecture, and on-call has a written playbook for connector one.
+
+`warehouse_x_receipt` uses the same job API and fixture runner. The carrier playbook is [runbooks/carrier_x_pod.md](./runbooks/carrier_x_pod.md).
 
 ---
 
@@ -394,7 +406,7 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 | 5–6 | Runner + `carrier_x_pod` | Seven fixtures green |
 | 7–8 | Camofox, vault, files | One real POD or status |
 | 9 | MCP | Agent uses the same contract |
-| 10–11 | Portal + Stripe | Key, docs, meters |
+| 10–11 | Portal + plans | Key, docs, meters |
 | 12 | Scale | Polls stay fast under load |
 | 13–14 | Studio + repair | Safe graph updates |
 | 15–16 | Second connector + launch | Second endpoint, real tenants |

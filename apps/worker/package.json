@@ -11,12 +11,15 @@
     "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1139.0",
     "@shadowapi/core": "workspace:*",
     "@shadowapi/db": "workspace:*",
     "@shadowapi/graph-runner": "workspace:*",
     "bullmq": "latest",
+    "camoufox-js": "^0.12.0",
     "drizzle-orm": "latest",
-    "ioredis": "latest"
+    "ioredis": "latest",
+    "playwright-core": "1.60.0"
   },
   "devDependencies": {
     "@types/node": "latest",

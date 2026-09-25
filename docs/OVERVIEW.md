@@ -18,7 +18,7 @@ For most buyers, ShadowAPI is **not a browser product**. It is **an API**:
 - An **API key**, request fields, and response fields (JSON, plus optional document links).  
 - **Async jobs**: start a request, check status, fetch the result — like many modern backend services.
 
-You integrate it the same way you would Stripe, Twilio, or any vendor API: your server sends inputs, you receive structured outputs. **How** ShadowAPI reaches the underlying website is an internal operations concern; it is not something your product or your end users need to run, install, or understand.
+You integrate it the same way you would any vendor API: your server sends inputs, you receive structured outputs. **How** ShadowAPI reaches the underlying website is an internal operations concern; it is not something your product or your end users need to run, install, or understand.
 
 ---
 

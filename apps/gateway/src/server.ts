@@ -16,9 +16,11 @@ const { db, close: closeDb } = createDb(databaseUrl);
 const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6380", { maxRetriesPerRequest: null });
 const app = buildGatewayApp(db, {
   enqueue: async (jobId, tenantId) => {
+    console.log(`[gateway] enqueue job_id=${jobId}`);
     await getJobQueue().add("run", { jobId, tenantId }, { jobId, attempts: 8, backoff: { type: "fixed", delay: 300 } });
   },
   cacheGet: (key) => redis.get(key),
+  redis,
 });
 
 const start = async () => {

@@ -19,8 +19,12 @@ const worker = new Worker(
   "shadowapi-jobs",
   async (job) => {
     const jobId = job.data.jobId as string;
+    const started = Date.now();
     try {
       await processQueuedJob(db, connection, jobId);
+      console.log(`[worker] finish job_id=${jobId}`);
+      await connection.lpush("metrics:live_ms", String(Date.now() - started));
+      await connection.ltrim("metrics:live_ms", 0, 99);
     } catch (err) {
       if (err instanceof TenantBusyError) {
         await job.moveToDelayed(Date.now() + 500);

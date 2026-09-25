@@ -20,11 +20,14 @@
     "db:seed": "pnpm --filter @shadowapi/db run db:seed",
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
+    "dev:clean-jobs": "node scripts/dev-clean-jobs.mjs",
     "dev:gateway": "pnpm --filter @shadowapi/gateway dev",
+    "dev:gateways": "node scripts/dev-gateways.mjs",
     "dev:worker": "pnpm --filter @shadowapi/worker dev",
+    "dev:workers": "node scripts/dev-workers.mjs",
     "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build",
     "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run typecheck",
-    "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/gateway --filter @shadowapi/worker run test",
+    "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/gateway --filter @shadowapi/worker --filter @shadowapi/portal run test",
     "lint": "eslint ."
   }
 }

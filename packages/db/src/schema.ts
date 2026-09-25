@@ -26,6 +26,7 @@ export const usageKindEnum = pgEnum("usage_kind", ["cached_read", "live_run"]);
 export const tenants = pgTable("tenants", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
+  plan: text("plan").notNull().default("developer"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -90,6 +91,7 @@ export const jobs = pgTable(
   },
   (t) => [
     index("jobs_tenant_id_idx").on(t.tenantId),
+    index("jobs_tenant_id_id_idx").on(t.tenantId, t.id),
     index("jobs_status_idx").on(t.status),
     uniqueIndex("jobs_idempotency_idx").on(t.tenantId, t.idempotencyKey),
   ],
@@ -114,6 +116,22 @@ export const vaultSessions = pgTable(
     uniqueIndex("vault_sessions_unique").on(t.tenantId, t.connectorId, t.sessionId),
     index("vault_sessions_tenant_idx").on(t.tenantId),
   ],
+);
+
+export const portalUsers = pgTable(
+  "portal_users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    role: text("role").notNull().default("catalog"),
+    authorUntil: timestamp("author_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("portal_users_email_idx").on(t.email)],
 );
 
 export const usageEvents = pgTable(
@@ -145,4 +163,23 @@ export const auditLog = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("audit_log_tenant_created_idx").on(t.tenantId, t.createdAt)],
+);
+
+export const graphRepairs = pgTable(
+  "graph_repairs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id").notNull(),
+    connectorVersion: text("connector_version").notNull(),
+    lastGoodGraphVersion: text("last_good_graph_version").notNull(),
+    accessibilitySnapshot: text("accessibility_snapshot").notNull(),
+    proposedDiff: jsonb("proposed_diff").notNull(),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("graph_repairs_tenant_status_idx").on(t.tenantId, t.status)],
 );

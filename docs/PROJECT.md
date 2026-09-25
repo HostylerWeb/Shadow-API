@@ -66,7 +66,7 @@ Clients only call a thin **control plane** (REST + MCP). Live browser work runs 
 |-------|--------|
 | Language | **TypeScript** monorepo (pnpm) |
 | Public API + MCP | **Fastify** on the **latest stable Node.js** — validates, enqueues, reads status; returns in milliseconds |
-| Versions | **Latest stable of every runtime, image, and library** when added or upgraded (Node, pnpm, TypeScript, Fastify, PostgreSQL, Redis, BullMQ, Next.js, Stripe, Docker images). Lockfiles record that latest. See [ROADMAP.md](./ROADMAP.md). |
+| Versions | **Latest stable of every runtime, image, and library** when added or upgraded (Node, pnpm, TypeScript, Fastify, PostgreSQL, Redis, BullMQ, Next.js, Docker images). Lockfiles record that latest. See [ROADMAP.md](./ROADMAP.md). |
 | Shared domain | `packages/core` — job state machine, manifest/pre-flight validation, cache keys |
 | Graph logic | `packages/graph-runner` — deterministic steps, tested on fixtures without a browser |
 | Database | **PostgreSQL** — tenants, API keys, jobs, connector versions, usage, audit |
@@ -74,7 +74,7 @@ Clients only call a thin **control plane** (REST + MCP). Live browser work runs 
 | Artifacts | **S3-compatible** object storage; gateway issues short-lived signed URLs |
 | Live execution | **Worker** process only — Camofox, proxies, graph runner. Never inside API replicas |
 | Customer portal / Studio (later) | **Next.js** |
-| Billing | **Stripe** — subscriptions plus metered **cached** vs **live** runs |
+| Billing | Local plan gateway (`POST /v1/billing/plan`) plus metered **cached** vs **live** runs. No payment provider yet. |
 
 **How it stays responsive (~2000 clients):** most requests are validation, Redis cache hits, or Postgres status reads. API replicas scale horizontally. Workers scale on queue depth, with per-tenant and per-connector concurrency caps. Idempotency keys stop duplicate live runs. Cache-first reads (`run_mode: cached`) avoid a browser when the manifest TTL allows it.
 
@@ -661,7 +661,7 @@ Step-by-step checklists live in [ROADMAP.md](./ROADMAP.md). The phases below are
 
 ### Phase 4 — Commercial
 
-- [ ] Stripe billing (cached vs live meters), API keys, Redis rate limits
+- [ ] Plan billing (cached vs live meters), API keys, Redis rate limits
 - [ ] Horizontal gateway replicas; worker autoscaling on queue depth; per-tenant concurrency caps
 - [ ] Second vertical connector (template reuse)
 - [ ] Enterprise: dedicated capacity, BYO proxy

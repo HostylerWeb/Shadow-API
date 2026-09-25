@@ -3,6 +3,7 @@
   "connector_version": "1.0.1",
   "graph_version": "v1.0.1-g2",
   "auth_mode": "optional_session",
+  "session_lock_mode": "exclusive",
   "artifact_handling": "store_and_sign",
   "not_found_is_success": true,
   "inputs": {
@@ -31,5 +32,12 @@
     },
     "never_cache_fields": ["document_url"]
   },
-  "failure_codes": ["VALIDATION_ERROR", "CHALLENGE_REQUIRED", "ARTIFACT_GATE_FAILED", "SESSION_EXPIRED", "GRAPH_STEP_FAILED"]
+  "failure_codes": ["VALIDATION_ERROR", "CHALLENGE_REQUIRED", "ARTIFACT_GATE_FAILED", "SESSION_EXPIRED", "GRAPH_STEP_FAILED", "TARGET_TIMEOUT"],
+  "target_domains": ["staging.local", "carrier.example"],
+  "pii_fields": ["destination_zip", "signed_by"],
+  "runtime_profile": {
+    "proxy_mode": "datacenter_then_residential",
+    "datacenter_proxy_env": "CARRIER_X_DATACENTER_PROXY",
+    "residential_proxy_env": "CARRIER_X_RESIDENTIAL_PROXY"
+  }
 }

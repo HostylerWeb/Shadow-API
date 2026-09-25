@@ -1,3 +1,10 @@
 packages:
   - apps/*
   - packages/*
+minimumReleaseAgeExclude:
+  - baseline-browser-mapping
+  - electron-to-chromium
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  msgpackr-extract: true
