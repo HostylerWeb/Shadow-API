@@ -21,6 +21,7 @@ import { and, count, eq, sql } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import type { BrowserContextOptions } from "playwright-core";
 import { runLiveCarrier, type LiveCarrierResult } from "./live-carrier.js";
+import { runLiveCustom, type CustomManifest } from "./live-custom.js";
 import { proxyConfigError } from "./browser.js";
 import { withSessionLock } from "./session-lock.js";
 
@@ -61,14 +62,23 @@ async function finishCarrierRun(
     TARGET_TIMEOUT: "Target timed out",
     GRAPH_STEP_FAILED: "Graph step failed",
   };
+  const failureMessage =
+    run.failureDetail ??
+    (run.failureCode ? (messages[run.failureCode] ?? run.failureCode) : null);
+  const storedOutputs =
+    run.jobStatus === "succeeded"
+      ? outputs
+      : outputs._debug != null
+        ? { _debug: outputs._debug }
+        : null;
   await db
     .update(jobs)
     .set({
       status: run.jobStatus,
       graphVersion: run.graphVersion,
-      outputs: run.jobStatus === "succeeded" ? outputs : null,
+      outputs: storedOutputs,
       failureCode: run.failureCode ?? null,
-      failureMessage: run.failureCode ? (messages[run.failureCode] ?? run.failureCode) : null,
+      failureMessage: run.failureCode ? failureMessage : null,
       updatedAt: now,
       completedAt: now,
     })
@@ -189,22 +199,64 @@ export async function processQueuedJob(
     return;
   }
 
-  if (row.connectorId === STUDIO_CONNECTOR_ID) {
-    const published = await db
-      .select()
-      .from(connectorVersions)
-      .where(
-        and(
-          eq(connectorVersions.connectorId, STUDIO_CONNECTOR_ID),
-          sql`${connectorVersions.manifest}->>'tenant_id' = ${row.tenantId}`,
-        ),
-      )
-      .limit(1);
-    const manifest = published[0]?.manifest as {
+  const custom = await db
+    .select()
+    .from(connectorVersions)
+    .where(
+      and(
+        eq(connectorVersions.connectorId, row.connectorId),
+        sql`${connectorVersions.manifest}->>'tenant_id' = ${row.tenantId}`,
+        sql`${connectorVersions.manifest}->'graph' IS NOT NULL`,
+      ),
+    )
+    .limit(1);
+  if (row.connectorId === STUDIO_CONNECTOR_ID || custom[0]) {
+    const published = custom[0]
+      ? custom
+      : await db
+          .select()
+          .from(connectorVersions)
+          .where(
+            and(
+              eq(connectorVersions.connectorId, STUDIO_CONNECTOR_ID),
+              sql`${connectorVersions.manifest}->>'tenant_id' = ${row.tenantId}`,
+            ),
+          )
+          .limit(1);
+    const manifest = published[0]?.manifest as CustomManifest & {
       graph?: unknown;
       pattern?: NavigationPattern;
       output_name?: string;
     };
+    if (custom[0] && row.connectorId.startsWith("custom_")) {
+      const vaultRow = (
+        await db
+          .select()
+          .from(vaultSessions)
+          .where(
+            and(
+              eq(vaultSessions.tenantId, row.tenantId),
+              eq(vaultSessions.connectorId, row.connectorId),
+              eq(vaultSessions.sessionId, "default"),
+            ),
+          )
+          .limit(1)
+      )[0];
+      let storageState: BrowserContextOptions["storageState"] | undefined;
+      if (vaultRow) {
+        try {
+          storageState = JSON.parse(decryptVault(vaultRow.encryptedStorageState)) as BrowserContextOptions["storageState"];
+        } catch {
+          storageState = undefined;
+        }
+      }
+      const stringInputs = Object.fromEntries(
+        Object.entries(inputs).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      );
+      const run = await runLiveCustom({ manifest, inputs: stringInputs, storageState });
+      await finishCarrierRun(db, redis, row, run);
+      return;
+    }
     const graph = manifest?.graph ? loadGraph(manifest.graph) : null;
     const pattern = manifest?.pattern;
     const replay = graph && pattern ? replayStudioGraph(graph, pattern) : null;

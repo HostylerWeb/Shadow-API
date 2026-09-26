@@ -10,28 +10,36 @@ export default async function RepairsPage({ searchParams }: { searchParams: Prom
   const user = await loadPortalUser(handle.db, session.userId);
   if (!user || !authorIsActive(user.role, user.authorUntil)) {
     await handle.close();
-    redirect("/keys");
+    redirect("/endpoints");
   }
   const repairs = await listPendingRepairs(handle.db, session.tenantId);
   await handle.close();
   return (
-    <main>
-      <h1>Repairs</h1>
-      <p>Approve a graph update. The connector version stays the same.</p>
-      {query.approved ? <p>Graph version promoted.</p> : null}
-      {query.error ? <p>Replay did not pass.</p> : null}
-      <ul>
-        {repairs.map((repair) => (
-          <li key={repair.id}>
-            {repair.connectorId} · {repair.lastGoodGraphVersion}
-            <pre>{repair.accessibilitySnapshot}</pre>
-            <form action={approveRepairAction}>
-              <input type="hidden" name="id" value={repair.id} />
-              <button type="submit">Approve</button>
-            </form>
-          </li>
-        ))}
-      </ul>
+    <main className="customer-page">
+      <header className="page-head">
+        <h1>Repairs</h1>
+        <p>Author-only: approve a graph fix after a site change. Customers use My endpoints and Activity.</p>
+      </header>
+      {query.approved ? <p className="banner">Graph version promoted.</p> : null}
+      {query.error ? <p className="banner">Replay did not pass.</p> : null}
+      {repairs.length === 0 ? (
+        <p className="card empty-state">No pending repairs.</p>
+      ) : (
+        <ul className="endpoint-list">
+          {repairs.map((repair) => (
+            <li key={repair.id} className="card">
+              <p>
+                <strong>{repair.connectorId}</strong> · {repair.lastGoodGraphVersion}
+              </p>
+              <pre>{repair.accessibilitySnapshot}</pre>
+              <form action={approveRepairAction}>
+                <input type="hidden" name="id" value={repair.id} />
+                <button type="submit">Approve</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   );
 }

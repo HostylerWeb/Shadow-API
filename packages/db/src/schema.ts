@@ -129,6 +129,7 @@ export const portalUsers = pgTable(
     passwordHash: text("password_hash").notNull(),
     role: text("role").notNull().default("catalog"),
     authorUntil: timestamp("author_until", { withTimezone: true }),
+    dashboardKey: text("dashboard_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("portal_users_email_idx").on(t.email)],

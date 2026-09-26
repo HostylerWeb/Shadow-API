@@ -3,11 +3,14 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createDb } from "@shadowapi/db";
 import { buildGatewayApp } from "../../gateway/src/app.ts";
-import { createApiKey, quickstartText, signUp, loadPortalUser, authorIsActive, publishStudioConnector, approveRepair } from "../src/accounts.ts";
-import { connectorVersions, auditLog, vaultSessions, graphRepairs } from "@shadowapi/db/schema";
+import { createApiKey, quickstartText, signUp, publishUserEndpoint, approveRepair } from "../src/accounts.ts";
+import { connectorVersions, graphRepairs, jobs, portalUsers } from "@shadowapi/db/schema";
 import { eq } from "drizzle-orm";
+import { listTenantJobs } from "../src/dashboard.ts";
+import { adminTenants, requireAdmin } from "../src/admin.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
+process.env.VAULT_DATA_KEY ??= Buffer.alloc(32, 0).toString("base64");
 
 test("portal key calls POST /v1/jobs and quickstart documents the flow", async (t) => {
   if (!databaseUrl) {
@@ -37,7 +40,7 @@ test("portal key calls POST /v1/jobs and quickstart documents the flow", async (
   await app.close();
 });
 
-test("catalog users cannot publish and authors publish a two-URL P2 flow", async (t) => {
+test("catalog users can publish a taught endpoint and authors can approve repairs", async (t) => {
   if (!databaseUrl) {
     t.skip("DATABASE_URL is required");
     return;
@@ -49,19 +52,10 @@ test("catalog users cannot publish and authors publish a two-URL P2 flow", async
     await handle.close();
   });
   const catalog = await signUp(handle.db, `cat-${randomBytes(4).toString("hex")}@example.com`, "password-123", "catalog");
-  const catalogUser = await loadPortalUser(handle.db, catalog.userId);
-  assert.equal(authorIsActive(catalogUser!.role, catalogUser!.authorUntil), false);
-  const denied = await publishStudioConnector(handle.db, catalog.userId, catalog.tenantId, {
-    url1: "https://staging.local/tracking",
-    url2: "https://staging.local/tracking?tracking=123",
-    pattern: "P2",
-    inputName: "tracking_number",
-    outputName: "status",
-  });
-  assert.equal(denied.ok, false);
-
-  const author = await signUp(handle.db, `auth-${randomBytes(4).toString("hex")}@example.com`, "password-123", "author");
-  const published = await publishStudioConnector(handle.db, author.userId, author.tenantId, {
+  const { publishUserEndpoint } = await import("../src/accounts.ts");
+  const published = await publishUserEndpoint(handle.db, catalog.userId, catalog.tenantId, {
+    title: "Support tracking",
+    description: "Parcel lookup for support",
     url1: "https://staging.local/tracking",
     url2: "https://staging.local/tracking?tracking=123",
     pattern: "P2",
@@ -69,20 +63,28 @@ test("catalog users cannot publish and authors publish a two-URL P2 flow", async
     outputName: "status",
   });
   assert.equal(published.ok, true);
-  const rows = await handle.db.select().from(connectorVersions).where(eq(connectorVersions.connectorId, "studio_tracking"));
-  assert.equal(rows.some((row) => (row.manifest as { tenant_id?: string }).tenant_id === author.tenantId), true);
-  const audits = await handle.db.select().from(auditLog).where(eq(auditLog.tenantId, author.tenantId));
-  assert.equal(audits.some((row) => row.action === "vault_onboarding"), true);
-  const vaults = await handle.db.select().from(vaultSessions).where(eq(vaultSessions.tenantId, author.tenantId));
-  assert.equal(vaults.length, 1);
-  assert.equal(vaults[0].connectorId, "studio_tracking");
+  if (!published.ok) return;
+  const rows = await handle.db.select().from(connectorVersions).where(eq(connectorVersions.connectorId, published.connectorId));
+  assert.equal(rows.length, 1);
 
-  const version = `1.0.0-${author.tenantId}`;
+  const author = await signUp(handle.db, `auth-${randomBytes(4).toString("hex")}@example.com`, "password-123", "author");
+  const authorPub = await publishUserEndpoint(handle.db, author.userId, author.tenantId, {
+    title: "Author flow",
+    description: "Author endpoint",
+    url1: "https://staging.local/tracking",
+    url2: "https://staging.local/tracking?tracking=123",
+    pattern: "P2",
+    inputName: "tracking_number",
+    outputName: "status",
+  });
+  assert.equal(authorPub.ok, true);
+  if (!authorPub.ok) return;
+  const version = "1.0.0";
   const [repair] = await handle.db
     .insert(graphRepairs)
     .values({
       tenantId: author.tenantId,
-      connectorId: "studio_tracking",
+      connectorId: authorPub.connectorId,
       connectorVersion: version,
       lastGoodGraphVersion: "v1.0.0-g1",
       accessibilitySnapshot: "role=status name=shipment",
@@ -94,11 +96,30 @@ test("catalog users cannot publish and authors publish a two-URL P2 flow", async
   assert.equal(approved.ok, true);
   if (approved.ok) {
     assert.equal(approved.graphVersion, "v1.0.0-g2");
-    assert.equal(approved.connectorVersion, version);
   }
-  const updated = (
-    await handle.db.select().from(connectorVersions).where(eq(connectorVersions.connectorVersion, version)).limit(1)
-  )[0];
-  assert.equal(updated.graphVersion, "v1.0.0-g2");
-  assert.equal(updated.connectorVersion, version);
+});
+
+test("job lists stay on the tenant and catalog users are not admins", async (t) => {
+  if (!databaseUrl) {
+    t.skip("DATABASE_URL is required");
+    return;
+  }
+  const handle = createDb(databaseUrl);
+  after(async () => {
+    await handle.close();
+  });
+  const emailA = `dash-a-${randomBytes(3).toString("hex")}@example.com`;
+  const emailB = `dash-b-${randomBytes(3).toString("hex")}@example.com`;
+  const a = await signUp(handle.db, emailA, "password-123");
+  const b = await signUp(handle.db, emailB, "password-123");
+  await handle.db.insert(jobs).values({ tenantId: a.tenantId, connectorId: "carrier_x_pod", status: "queued" });
+  await handle.db.insert(jobs).values({ tenantId: b.tenantId, connectorId: "warehouse_x_receipt", status: "succeeded" });
+  const mine = await listTenantJobs(handle.db, a.tenantId);
+  assert.equal(mine.every((job) => job.tenantId === a.tenantId), true);
+  assert.equal(await requireAdmin(handle.db, a.userId), null);
+  await handle.db.update(portalUsers).set({ role: "admin" }).where(eq(portalUsers.id, b.userId));
+  const admin = await requireAdmin(handle.db, b.userId);
+  assert.equal(admin?.role, "admin");
+  const tenants = await adminTenants(handle.db, 1, emailA.split("@")[0] ?? emailA);
+  assert.equal(tenants.rows.some((row) => row.id === a.tenantId), true);
 });

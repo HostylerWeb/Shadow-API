@@ -12,6 +12,7 @@
     "@shadowapi/core": "workspace:*",
     "@shadowapi/db": "workspace:*",
     "drizzle-orm": "latest",
+    "ioredis": "latest",
     "@shadowapi/graph-runner": "workspace:*",
     "next": "latest",
     "react": "latest",

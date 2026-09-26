@@ -2,11 +2,12 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, count, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@shadowapi/db";
-import { encryptVault } from "@shadowapi/core";
+import { decryptVault, encryptVault } from "@shadowapi/core";
 import { compileStudioGraph, loadCarrierFixture, loadGraph, replayStudioGraph, runCarrierFixture, runWarehouseFixture, loadWarehouseFixture, STUDIO_CONNECTOR_ID, STUDIO_GRAPH_VERSION } from "@shadowapi/graph-runner";
 import type { NavigationPattern } from "@shadowapi/graph-runner";
+import type { MarkedExtract } from "./teach/protocol";
 import { apiKeys, auditLog, connectorVersions, graphRepairs, portalUsers, tenants, usageEvents, vaultSessions } from "@shadowapi/db/schema";
 
 const manifestPath = path.join(
@@ -32,8 +33,8 @@ function hashKey(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
-async function publishCarrier(db: Db): Promise<void> {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+async function publishManifest(db: Db, filePath: string): Promise<void> {
+  const manifest = JSON.parse(readFileSync(filePath, "utf8")) as {
     connector_id: string;
     connector_version: string;
     graph_version: string;
@@ -57,19 +58,27 @@ async function publishCarrier(db: Db): Promise<void> {
   });
 }
 
+export async function publishCatalogConnectors(db: Db): Promise<void> {
+  await publishManifest(db, manifestPath);
+  await publishManifest(db, path.join(path.dirname(manifestPath), "../warehouse_x_receipt/manifest.json"));
+}
+
 export async function signUp(
   db: Db,
   email: string,
   password: string,
   role: "catalog" | "author" = "catalog",
 ): Promise<{ userId: string; tenantId: string }> {
-  const [tenant] = await db.insert(tenants).values({ name: email }).returning();
+  const normalized = email.trim().toLowerCase();
+  const [tenant] = await db.insert(tenants).values({ name: normalized }).returning();
   const authorUntil = role === "author" ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
   const [user] = await db
     .insert(portalUsers)
-    .values({ tenantId: tenant.id, email, passwordHash: hashPassword(password), role, authorUntil })
+    .values({ tenantId: tenant.id, email: normalized, passwordHash: hashPassword(password), role, authorUntil })
     .returning();
-  await publishCarrier(db);
+  await publishCatalogConnectors(db);
+  const secret = await createApiKey(db, tenant.id, "dashboard");
+  await db.update(portalUsers).set({ dashboardKey: encryptVault(secret) }).where(eq(portalUsers.id, user.id));
   return { userId: user.id, tenantId: tenant.id };
 }
 
@@ -89,10 +98,20 @@ export async function signIn(
   email: string,
   password: string,
 ): Promise<{ userId: string; tenantId: string } | null> {
-  const rows = await db.select().from(portalUsers).where(eq(portalUsers.email, email)).limit(1);
+  const rows = await db.select().from(portalUsers).where(eq(portalUsers.email, email.trim().toLowerCase())).limit(1);
   const user = rows[0];
   if (!user || !verifyPassword(password, user.passwordHash)) return null;
   return { userId: user.id, tenantId: user.tenantId };
+}
+
+export const MAX_CUSTOMER_KEYS = 5;
+
+export async function userCreatedKeyCount(db: Db, tenantId: string): Promise<number> {
+  const rows = await db
+    .select({ n: count() })
+    .from(apiKeys)
+    .where(and(eq(apiKeys.tenantId, tenantId), isNull(apiKeys.revokedAt), sql`${apiKeys.name} <> 'dashboard'`));
+  return Number(rows[0]?.n ?? 0);
 }
 
 export async function createApiKey(db: Db, tenantId: string, name: string): Promise<string> {
@@ -108,10 +127,7 @@ export async function createApiKey(db: Db, tenantId: string, name: string): Prom
 }
 
 export async function revokeApiKey(db: Db, tenantId: string, keyId: string): Promise<void> {
-  await db
-    .update(apiKeys)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.tenantId, tenantId)));
+  await db.delete(apiKeys).where(and(eq(apiKeys.id, keyId), eq(apiKeys.tenantId, tenantId), sql`${apiKeys.name} <> 'dashboard'`));
 }
 
 export async function listApiKeys(db: Db, tenantId: string) {
@@ -123,7 +139,7 @@ export async function listApiKeys(db: Db, tenantId: string) {
       revokedAt: apiKeys.revokedAt,
     })
     .from(apiKeys)
-    .where(eq(apiKeys.tenantId, tenantId));
+    .where(and(eq(apiKeys.tenantId, tenantId), sql`${apiKeys.name} <> 'dashboard'`));
 }
 
 export async function usageCounts(db: Db, tenantId: string): Promise<{ cached_read: number; live_run: number }> {
@@ -140,14 +156,25 @@ export async function usageCounts(db: Db, tenantId: string): Promise<{ cached_re
 }
 
 export function loadCatalog() {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+  const carrier = catalogFromManifest(manifestPath, "Look up a Carrier X shipment and, when you ask for it, a proof-of-delivery file.");
+  const warehousePath = path.join(path.dirname(manifestPath), "../warehouse_x_receipt/manifest.json");
+  const warehouse = catalogFromManifest(
+    warehousePath,
+    "Look up whether a warehouse receipt was received.",
+  );
+  return [carrier, warehouse];
+}
+
+function catalogFromManifest(filePath: string, summary: string) {
+  const manifest = JSON.parse(readFileSync(filePath, "utf8")) as {
     connector_id: string;
     inputs: Record<string, { type: string; required?: boolean }>;
     outputs: Record<string, { type?: string; enum?: string[]; signed?: boolean }>;
   };
   return {
     id: manifest.connector_id,
-    summary: "Look up a Carrier X shipment and, when you ask for it, a proof-of-delivery file.",
+    title: manifest.connector_id === "warehouse_x_receipt" ? "Warehouse receipt" : "Shipment tracking",
+    summary,
     inputs: Object.entries(manifest.inputs).map(([name, field]) => ({
       name,
       type: field.type,
@@ -155,15 +182,19 @@ export function loadCatalog() {
       plain:
         name === "tracking_number"
           ? "The shipment number printed on the label."
-          : name === "include_pod_document"
-            ? "Ask for the proof-of-delivery file as well as the status."
-            : "Postal code, required only when you want the file and you are not using a saved session.",
+          : name === "receipt_id"
+            ? "The warehouse receipt number."
+            : name === "include_pod_document"
+              ? "Ask for the proof-of-delivery file as well as the status."
+              : name === "destination_zip"
+                ? "Postal code, required only when you want the file and you are not using a saved session."
+                : "Value sent to the connector.",
     })),
     outputs: Object.entries(manifest.outputs).map(([name, field]) => ({
       name,
       plain:
         name === "status"
-          ? `Where the shipment is: ${(field.enum ?? []).join(", ")}.`
+          ? `Status: ${(field.enum ?? []).join(", ")}.`
           : name === "document_url"
             ? "A short-lived link to the proof-of-delivery file. It expires in about 15 minutes."
             : "Name of the person who signed, when the site shows one.",
@@ -178,6 +209,8 @@ export function quickstartText(base = "http://localhost:3000"): string {
     `curl -s -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \\`,
     `  -d '{"connector_id":"carrier_x_pod","inputs":{"tracking_number":"ABC"}}' \\`,
     `  ${base}/v1/jobs`,
+    "",
+    `The same call with connector_id warehouse_x_receipt and inputs.receipt_id looks up a warehouse receipt.`,
     "",
     `curl -s -H "Authorization: Bearer $API_KEY" ${base}/v1/jobs/JOB_ID`,
     "",
@@ -195,55 +228,279 @@ export async function activeKeyCount(db: Db, tenantId: string): Promise<number> 
   return Number(rows[0]?.n ?? 0);
 }
 
+export const MAX_CUSTOM_ENDPOINTS = 5;
+
+function slugConnectorId(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 48);
+  return slug ? `custom_${slug}` : "custom_endpoint";
+}
+
+export async function listUserEndpoints(db: Db, tenantId: string) {
+  const rows = await db.select().from(connectorVersions);
+  return rows
+    .filter((row) => {
+      const manifest = row.manifest as { tenant_id?: string; graph?: unknown; title?: string; description?: string };
+      return manifest.tenant_id === tenantId && manifest.graph;
+    })
+    .map((row) => {
+      const manifest = row.manifest as { title?: string; description?: string; start_url?: string };
+      return {
+        connectorId: row.connectorId,
+        title: manifest.title ?? row.connectorId,
+        description: manifest.description ?? "",
+        startUrl: manifest.start_url ?? "",
+        resultUrl: (row.manifest as { result_url?: string }).result_url ?? "",
+        pattern: ((row.manifest as { pattern?: string }).pattern ?? "P2") as "P1" | "P2" | "P3",
+        inputName: Object.keys((row.manifest as { inputs?: Record<string, unknown> }).inputs ?? {})[0] ?? "",
+        outputName: (row.manifest as { output_name?: string }).output_name ?? "result",
+      };
+    });
+}
+
+export async function userEndpointCount(db: Db, tenantId: string): Promise<number> {
+  return (await listUserEndpoints(db, tenantId)).length;
+}
+
+function templatizeResultUrl(resultUrl: string, inputName: string, sample: string): string {
+  if (!sample) return resultUrl;
+  if (resultUrl.includes(sample)) return resultUrl.replaceAll(sample, `{${inputName}}`);
+  const encoded = encodeURIComponent(sample);
+  if (encoded !== sample && resultUrl.includes(encoded)) return resultUrl.replaceAll(encoded, `{${inputName}}`);
+  return resultUrl;
+}
+
+function parseMarkedExtract(raw: string): MarkedExtract | null {
+  if (!raw.trim()) return null;
+  try {
+    return JSON.parse(raw) as MarkedExtract;
+  } catch {
+    return null;
+  }
+}
+
+function manifestExtract(
+  extractJson: string | undefined,
+  extractId: string,
+  sample: string,
+  extractMode?: string,
+): Record<string, unknown> {
+  const marked = parseMarkedExtract(extractJson ?? "");
+  if (marked?.kind === "marked_list") {
+    return {
+      kind: "marked_list",
+      row_selector: marked.row_selector,
+      fields: marked.fields,
+    };
+  }
+  if (marked?.kind === "marked_single") {
+    return { kind: "marked_single", selector: marked.selector };
+  }
+  if (marked?.kind === "marked_page") {
+    return { kind: "marked_page", fields: marked.fields };
+  }
+  if (extractMode === "result_list" || extractId === "result_rows") {
+    return { kind: "result_rows" };
+  }
+  return extractFromCandidate(extractId, sample, extractMode === "result_list" ? "result_list" : "single");
+}
+
+function outputSchemaFromExtract(
+  extract: Record<string, unknown>,
+  outputName: string,
+): Record<string, unknown> {
+  if (extract.kind === "marked_list" && Array.isArray(extract.fields)) {
+    const fields = extract.fields as Array<{ key: string }>;
+    return {
+      results: {
+        type: "array",
+        items: Object.fromEntries(fields.map((field) => [field.key, { type: "string" }])),
+      },
+    };
+  }
+  if (extract.kind === "marked_page" && Array.isArray(extract.fields)) {
+    const fields = extract.fields as Array<{ key: string }>;
+    return Object.fromEntries(fields.map((field) => [field.key, { type: "string" }]));
+  }
+  if (extract.kind === "result_rows") {
+    return {
+      results: {
+        type: "array",
+        items: { name: { type: "string" }, number: { type: "string" }, address: { type: "string" } },
+      },
+    };
+  }
+  return { [outputName]: { type: "string" } };
+}
+
+function outputNameFromExtract(extract: Record<string, unknown>, fallback: string): string {
+  if (extract.kind === "marked_list" || extract.kind === "result_rows") return "results";
+  if (extract.kind === "marked_page") return Object.keys((extract.fields as Array<{ key: string }>) ?? {})[0] ?? fallback;
+  return fallback;
+}
+
+function extractFromCandidate(
+  id: string,
+  sample: string,
+  mode?: "single" | "result_list",
+): { kind: "title" | "h1" | "h2" | "list" | "text" | "main" | "result_rows"; match?: string } {
+  if (mode === "result_list" || id === "result_rows") return { kind: "result_rows" };
+  if (id === "title") return { kind: "title" };
+  if (id.startsWith("h1")) return { kind: "h1" };
+  if (id.startsWith("h2")) return { kind: "h2" };
+  if (id.startsWith("li")) return { kind: "list" };
+  if (sample) return { kind: "text", match: sample.slice(0, 200) };
+  return { kind: "main" };
+}
+
+export async function publishUserEndpoint(
+  db: Db,
+  userId: string,
+  tenantId: string,
+  input: {
+    title: string;
+    description: string;
+    url1: string;
+    url2: string;
+    pattern: NavigationPattern;
+    inputName: string;
+    outputName: string;
+    sampleOutput?: string;
+    extractId?: string;
+    extractMode?: "single" | "result_list" | "marked_list" | "marked_single" | "marked_page";
+    extractJson?: string;
+    templatingSample?: string;
+    inputSelector?: string;
+    formFieldsJson?: string;
+    fixedConnectorId?: string;
+  },
+): Promise<{ ok: true; connectorId: string } | { ok: false; message: string }> {
+  const user = await loadPortalUser(db, userId);
+  if (!user || user.tenantId !== tenantId) {
+    return { ok: false, message: "Account not found" };
+  }
+  const connectorId = input.fixedConnectorId ?? slugConnectorId(input.title);
+  const existingRow = await db
+    .select()
+    .from(connectorVersions)
+    .where(and(eq(connectorVersions.connectorId, connectorId), eq(connectorVersions.connectorVersion, "1.0.0")))
+    .limit(1);
+  if (!existingRow[0] && (await userEndpointCount(db, tenantId)) >= MAX_CUSTOM_ENDPOINTS) {
+    return { ok: false, message: "Endpoint limit reached" };
+  }
+  const kind = input.inputName === "page" || input.url1 === input.url2 ? ("read" as const) : ("lookup" as const);
+  const apiInput = kind === "read" ? "" : input.inputName === "page" ? "query" : input.inputName;
+  const sample = (input.sampleOutput ?? "").trim();
+  const templating = (input.templatingSample ?? sample).trim();
+  const extract = manifestExtract(input.extractJson, input.extractId ?? "main", sample, input.extractMode);
+  const publishedOutputName = outputNameFromExtract(extract, input.outputName);
+  let formFields: Array<{ key: string; selector: string }> = [];
+  try {
+    formFields = JSON.parse(input.formFieldsJson ?? "[]") as Array<{ key: string; selector: string }>;
+  } catch {
+    formFields = [];
+  }
+  const inputSchema =
+    kind === "read"
+      ? {}
+      : Object.fromEntries(
+          (formFields.length ? formFields : [{ key: apiInput || "query" }]).map((field) => [
+            field.key,
+            { type: "string", required: true },
+          ]),
+        );
+  const resultUrl = kind === "read" ? input.url1 : templatizeResultUrl(input.url2, apiInput || "query", templating);
+  const graph = compileStudioGraph({ ...input, kind, url2: resultUrl });
+  const chosen = replayStudioGraph(graph, input.pattern);
+  const other = replayStudioGraph(graph, input.pattern === "P2" ? "P3" : "P2");
+  if (!chosen.ok || other.ok) {
+    return { ok: false, message: "Teaching replay failed. Check the result page URL and how the site behaves after submit." };
+  }
+  const connectorVersion = "1.0.0";
+  const manifest = {
+    connector_id: connectorId,
+    connector_version: connectorVersion,
+    graph_version: STUDIO_GRAPH_VERSION,
+    tenant_id: tenantId,
+    title: input.title,
+    description: input.description,
+    start_url: input.url1,
+    result_url: resultUrl,
+    kind,
+    pattern: input.pattern,
+    output_name: publishedOutputName,
+    sample_output: sample.slice(0, 2000),
+    extract,
+    input_selector: input.inputSelector?.trim() || undefined,
+    form_fields: formFields.length ? formFields : undefined,
+    inputs: inputSchema,
+    outputs: outputSchemaFromExtract(extract, input.outputName),
+    graph,
+  };
+  const existing = existingRow;
+  if (existing[0]) {
+    await db
+      .update(connectorVersions)
+      .set({ graphVersion: STUDIO_GRAPH_VERSION, manifest })
+      .where(eq(connectorVersions.id, existing[0].id));
+  } else {
+    await db.insert(connectorVersions).values({
+      connectorId,
+      connectorVersion,
+      graphVersion: STUDIO_GRAPH_VERSION,
+      manifest,
+    });
+  }
+  const vault = await db
+    .select()
+    .from(vaultSessions)
+    .where(
+      and(eq(vaultSessions.tenantId, tenantId), eq(vaultSessions.connectorId, connectorId), eq(vaultSessions.sessionId, "default")),
+    )
+    .limit(1);
+  if (!vault[0]) {
+    await db.insert(vaultSessions).values({
+      tenantId,
+      connectorId,
+      sessionId: "default",
+      encryptedStorageState: encryptVault(JSON.stringify({ cookies: [], origins: [], tenantId })),
+    });
+    await db.insert(auditLog).values({
+      tenantId,
+      actorType: "portal_user",
+      actorId: userId,
+      action: "vault_onboarding",
+      resourceType: "vault_session",
+      resourceId: `${tenantId}:${connectorId}:default`,
+    });
+  }
+  return { ok: true, connectorId };
+}
+
+export async function deleteUserEndpoint(db: Db, tenantId: string, connectorId: string): Promise<boolean> {
+  const mine = await listUserEndpoints(db, tenantId);
+  if (!mine.some((row) => row.connectorId === connectorId)) return false;
+  await db.delete(vaultSessions).where(and(eq(vaultSessions.tenantId, tenantId), eq(vaultSessions.connectorId, connectorId)));
+  await db.delete(connectorVersions).where(eq(connectorVersions.connectorId, connectorId));
+  return true;
+}
+
 export async function publishStudioConnector(
   db: Db,
   userId: string,
   tenantId: string,
   input: { url1: string; url2: string; pattern: NavigationPattern; inputName: string; outputName: string },
 ): Promise<{ ok: true; connectorId: string } | { ok: false; message: string }> {
-  const user = await loadPortalUser(db, userId);
-  if (!user || !authorIsActive(user.role, user.authorUntil)) {
-    return { ok: false, message: "Studio is limited to authors" };
-  }
-  const graph = compileStudioGraph(input);
-  const chosen = replayStudioGraph(graph, input.pattern);
-  const other = replayStudioGraph(graph, input.pattern === "P2" ? "P3" : "P2");
-  if (!chosen.ok || other.ok) {
-    return { ok: false, message: "Staging replay failed" };
-  }
-  const connectorVersion = `1.0.0-${tenantId}`;
-  const manifest = {
-    connector_id: STUDIO_CONNECTOR_ID,
-    connector_version: connectorVersion,
-    graph_version: STUDIO_GRAPH_VERSION,
-    tenant_id: tenantId,
-    pattern: input.pattern,
-    output_name: input.outputName,
-    inputs: { [input.inputName]: { type: "string", required: true } },
-    outputs: { [input.outputName]: { type: "string" } },
-    graph,
-  };
-  await db.insert(connectorVersions).values({
-    connectorId: STUDIO_CONNECTOR_ID,
-    connectorVersion,
-    graphVersion: STUDIO_GRAPH_VERSION,
-    manifest,
+  return publishUserEndpoint(db, userId, tenantId, {
+    title: "My tracking endpoint",
+    fixedConnectorId: STUDIO_CONNECTOR_ID,
+    description: "Published from Studio",
+    ...input,
   });
-  await db.insert(vaultSessions).values({
-    tenantId,
-    connectorId: STUDIO_CONNECTOR_ID,
-    sessionId: "studio",
-    encryptedStorageState: encryptVault(JSON.stringify({ cookies: [], origins: [], tenantId })),
-  });
-  await db.insert(auditLog).values({
-    tenantId,
-    actorType: "portal_user",
-    actorId: userId,
-    action: "vault_onboarding",
-    resourceType: "vault_session",
-    resourceId: `${tenantId}:${STUDIO_CONNECTOR_ID}:studio`,
-  });
-  return { ok: true, connectorId: STUDIO_CONNECTOR_ID };
 }
 
 export async function listPendingRepairs(db: Db, tenantId: string) {
@@ -256,12 +513,15 @@ export async function approveRepair(
   repairId: string,
 ): Promise<{ ok: true; graphVersion: string; connectorVersion: string } | { ok: false; message: string }> {
   const user = await loadPortalUser(db, userId);
-  if (!user || !authorIsActive(user.role, user.authorUntil)) {
+  if (!user || (user.role !== "admin" && !authorIsActive(user.role, user.authorUntil))) {
     return { ok: false, message: "Studio is limited to authors" };
   }
   const repairs = await db.select().from(graphRepairs).where(eq(graphRepairs.id, repairId)).limit(1);
   const repair = repairs[0];
-  if (!repair || repair.tenantId !== user.tenantId || repair.status !== "pending") {
+  if (!repair || repair.status !== "pending") {
+    return { ok: false, message: "Repair not found" };
+  }
+  if (user.role !== "admin" && repair.tenantId !== user.tenantId) {
     return { ok: false, message: "Repair not found" };
   }
   const published = await db
@@ -276,7 +536,7 @@ export async function approveRepair(
   let replayOk = false;
   if (repair.connectorId === "warehouse_x_receipt") {
     replayOk = runWarehouseFixture(loadWarehouseFixture("found")).jobStatus === "succeeded";
-  } else if (repair.connectorId === STUDIO_CONNECTOR_ID) {
+  } else if (repair.connectorId === STUDIO_CONNECTOR_ID || (row.manifest as { graph?: unknown }).graph) {
     const graph = (row.manifest as { graph?: unknown; pattern?: "P1" | "P2" | "P3" }).graph;
     const pattern = (row.manifest as { pattern?: "P1" | "P2" | "P3" }).pattern ?? "P2";
     replayOk = Boolean(graph && replayStudioGraph(loadGraph(graph), pattern).ok);

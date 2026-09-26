@@ -49,6 +49,8 @@ export type CarrierFixture = {
 export type CarrierRun = {
   jobStatus: "succeeded" | "failed" | "blocked";
   failureCode?: string;
+  /** Human-readable detail for job UI (stored in failure_message when set). */
+  failureDetail?: string;
   outputs: Record<string, unknown>;
   graphVersion: string;
 };

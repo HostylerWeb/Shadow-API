@@ -10,7 +10,19 @@ export function compileStudioGraph(input: {
   pattern: NavigationPattern;
   inputName: string;
   outputName: string;
+  kind?: "read" | "lookup";
 }): GraphDocument {
+  if (input.kind === "read" || input.url1 === input.url2) {
+    return {
+      graph_version: STUDIO_GRAPH_VERSION,
+      success_enums: ["IN_TRANSIT"],
+      steps: [
+        { id: "open", type: "navigate", url: input.url1 },
+        { id: "after", type: "branch", patterns: ["P1"], then: "extract" },
+        { id: "extract", type: "extract" },
+      ],
+    };
+  }
   return {
     graph_version: STUDIO_GRAPH_VERSION,
     success_enums: ["IN_TRANSIT"],

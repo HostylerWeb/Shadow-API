@@ -43,6 +43,13 @@
       "when": 1790351000000,
       "tag": "0005_graph_repairs",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790354000000,
+      "tag": "0006_dashboard_key",
+      "breakpoints": true
     }
   ]
 }
