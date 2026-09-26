@@ -1,15 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createDb } from "@shadowapi/db";
+import { listApiKeys } from "../../../src/accounts";
 import { getTenantConnector, listTenantConnectors } from "../../../src/dashboard";
 import { Breadcrumb } from "../../breadcrumb";
-import { requireSession } from "../../actions";
+import { requireSession, runJobAction } from "../../actions";
 import { TestRunSection } from "./test-run-section";
 
 export default async function TestEndpointPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connector?: string; error?: string; published?: string }>;
+  searchParams: Promise<{ connector?: string; error?: string; published?: string; reason?: string }>;
 }) {
   const session = await requireSession();
   const query = await searchParams;
@@ -17,6 +18,7 @@ export default async function TestEndpointPage({
   const mine = await listTenantConnectors(handle.db, session.tenantId);
   const connectorId = query.connector ?? mine[0]?.connectorId ?? "";
   const row = connectorId ? await getTenantConnector(handle.db, session.tenantId, connectorId) : null;
+  const keys = (await listApiKeys(handle.db, session.tenantId)).filter((key) => !key.revokedAt);
   await handle.close();
   if (mine.length === 0) redirect("/endpoints/new");
   if (!row) redirect("/endpoints");
@@ -54,11 +56,26 @@ export default async function TestEndpointPage({
         <p>{manifest.description}</p>
       </header>
       {query.published ? (
-        <p className="banner">Published. Try a search below — we send you to the job result when it finishes.</p>
+        <p className="banner">Published. Paste your API key, run this call, then say on the job page whether the response looks right.</p>
       ) : null}
-      {query.error ? <p className="banner">Could not start the test. Check that the gateway is running.</p> : null}
+      {query.error ? (
+        <p className="banner">
+          {query.reason === "Live quota exceeded"
+            ? "This account has used its live runs for the month. Upgrade the plan, or wait until next month, then run the test again."
+            : query.reason
+              ? `Could not start the test: ${query.reason}`
+              : "Could not start the test. Check that the gateway is running."}
+        </p>
+      ) : null}
 
-      <TestRunSection connectorId={connectorId} inputs={inputs} resultUrl={manifest.result_url} />
+      <TestRunSection
+        action={runJobAction}
+        connectorId={connectorId}
+        inputs={inputs}
+        resultUrl={manifest.result_url}
+        gateway={process.env.GATEWAY_URL ?? "http://localhost:3000"}
+        keys={keys.map((key) => ({ name: key.name, keyPrefix: key.keyPrefix }))}
+      />
 
       <details className="card test-run-details">
         <summary>Technical details (optional)</summary>

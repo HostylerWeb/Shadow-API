@@ -74,7 +74,7 @@ export function TeachPickConfirm({ mode, payload, onConfirm, onCancel }: Props) 
 function titleForMode(mode: PickMode): { title: string; subtitle: string } {
   switch (mode.kind) {
     case "pickRow":
-      return { title: "Is this one result row?", subtitle: "List APIs repeat this pattern for every search hit." };
+      return { title: "Is this one repeating item?", subtitle: "The API repeats this pattern for every matching row on the page." };
     case "pickFormInput":
     case "pickReplaceFormField":
     case "pickInput":
@@ -120,7 +120,7 @@ function hintFor(
   if (mode.kind === "pickRow" && meta.matchingRows === 1) {
     return {
       severity: "warn",
-      message: "Only one row matched. For search results, click a row that represents every item in the list.",
+      message: "Only one row matched. Click an item that shares the same layout as the others in the list.",
     };
   }
   if ((mode.kind === "pickNewField" || mode.kind === "pickReplaceField") && meta.kind === "container") {

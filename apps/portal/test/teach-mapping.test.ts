@@ -16,8 +16,8 @@ test("toMarkedListExtract preserves field order", () => {
 });
 
 test("nextFieldKey avoids collisions", () => {
-  const fields: TeachField[] = [{ id: "1", key: "name", selector: "a" }];
-  assert.equal(nextFieldKey(fields), "number");
+  const fields: TeachField[] = [{ id: "1", key: "field_1", selector: "a" }];
+  assert.equal(nextFieldKey(fields), "field_2");
 });
 
 test("sampleHasValues detects non-empty row", () => {

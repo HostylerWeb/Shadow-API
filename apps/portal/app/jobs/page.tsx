@@ -3,6 +3,7 @@ import { createDb } from "@shadowapi/db";
 import { listUserEndpoints } from "../../src/accounts";
 import { listTenantJobs } from "../../src/dashboard";
 import { requireSession } from "../actions";
+import { Status } from "../status";
 
 export default async function JobsPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const session = await requireSession();
@@ -22,7 +23,7 @@ export default async function JobsPage({ searchParams }: { searchParams: Promise
           <option value="">All statuses</option>
           {["queued", "running", "succeeded", "failed", "cancelled", "blocked"].map((item) => (
             <option key={item} value={item}>
-              {item}
+              {item.charAt(0).toUpperCase() + item.slice(1)}
             </option>
           ))}
         </select>
@@ -45,7 +46,7 @@ export default async function JobsPage({ searchParams }: { searchParams: Promise
                 <td>
                   <Link href={`/jobs/${job.id}`}>{titles.get(job.connectorId) ?? job.connectorId}</Link>
                 </td>
-                <td>{job.status}</td>
+                <td><Status value={job.status} /></td>
                 <td>{job.createdAt.toISOString().slice(0, 16).replace("T", " ")}</td>
               </tr>
             ))}

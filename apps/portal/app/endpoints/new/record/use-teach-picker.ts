@@ -11,13 +11,17 @@ export type PickMode =
   | { kind: "pickReplaceField"; fieldId: string }
   | { kind: "pickFormInput"; addAnother: boolean }
   | { kind: "pickReplaceFormField"; fieldId: string }
-  | { kind: "pickInput" };
+  | { kind: "pickInput" }
+  | { kind: "pickSubmit" }
+  | { kind: "record" }
+  | { kind: "pickExtraScalar"; blockIndex: number };
 
 export type UseTeachPickerOptions = {
   frame: RefObject<HTMLIFrameElement | null>;
   rowSelector: string;
   onPick: (payload: PickPayload) => void;
   onNavigate?: (url: string) => void;
+  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string }) => void;
   pickMode: PickMode;
   setPickMode: (mode: PickMode) => void;
 };
@@ -39,27 +43,38 @@ export function useTeachPicker(options: UseTeachPickerOptions) {
       },
       onSampleResult: () => undefined,
       onSampleSingle: () => undefined,
+      onRecorded: (action) => optionsRef.current.onRecorded?.(action),
     });
     return detach;
   }, []);
 
+  const { pickMode, rowSelector } = options;
+
   useEffect(() => {
-    const o = options;
-    const frame = o.frame.current;
+    const frame = optionsRef.current.frame.current;
     if (!frame) return;
-    if (o.pickMode.kind === "idle") setTeachMode(frame, "off");
-    else if (o.pickMode.kind === "pickRow") setTeachMode(frame, "pickRow");
-    else if (o.pickMode.kind === "pickInput" || o.pickMode.kind === "pickFormInput" || o.pickMode.kind === "pickReplaceFormField") setTeachMode(frame, "pickField");
-    else if (o.pickMode.kind === "pickNewField" || o.pickMode.kind === "pickReplaceField") {
-      setTeachMode(frame, "pickField", o.rowSelector || undefined);
+    if (pickMode.kind === "idle") setTeachMode(frame, "off");
+    else if (pickMode.kind === "record") setTeachMode(frame, "record");
+    else if (pickMode.kind === "pickRow") setTeachMode(frame, "pickRow");
+    else if (
+      pickMode.kind === "pickInput" ||
+      pickMode.kind === "pickFormInput" ||
+      pickMode.kind === "pickReplaceFormField" ||
+      pickMode.kind === "pickSubmit" ||
+      pickMode.kind === "pickExtraScalar"
+    ) {
+      setTeachMode(frame, "pickField");
+    } else if (pickMode.kind === "pickNewField" || pickMode.kind === "pickReplaceField") {
+      setTeachMode(frame, "pickField", rowSelector || undefined);
     }
-  }, [options]);
+  }, [pickMode, rowSelector]);
 }
 
 export function syncPickModeOnLoad(frame: HTMLIFrameElement | null, pickMode: PickMode, rowSelector: string) {
   syncPortalOrigin(frame);
-  if (pickMode.kind === "pickRow") setTeachMode(frame, "pickRow");
-  else if (pickMode.kind === "pickInput" || pickMode.kind === "pickFormInput" || pickMode.kind === "pickReplaceFormField") setTeachMode(frame, "pickField");
+  if (pickMode.kind === "record") setTeachMode(frame, "record");
+  else if (pickMode.kind === "pickRow") setTeachMode(frame, "pickRow");
+  else if (pickMode.kind === "pickInput" || pickMode.kind === "pickFormInput" || pickMode.kind === "pickReplaceFormField" || pickMode.kind === "pickSubmit" || pickMode.kind === "pickExtraScalar") setTeachMode(frame, "pickField");
   else if (pickMode.kind === "pickNewField" || pickMode.kind === "pickReplaceField") {
     setTeachMode(frame, "pickField", rowSelector || undefined);
   } else setTeachMode(frame, "off");
@@ -76,6 +91,9 @@ export function pickModeLabel(mode: PickMode, resultShape: "list" | "single" | "
   }
   if (mode.kind === "pickReplaceField") return "Click again to replace this field…";
   if (mode.kind === "pickReplaceFormField") return "Click the form input to use instead…";
+  if (mode.kind === "pickSubmit") return "Click the submit or search control…";
+  if (mode.kind === "record") return "Recording this page. Fill the form and click the button, then stop.";
+  if (mode.kind === "pickExtraScalar") return "Click the element for this extra value…";
   return null;
 }
 

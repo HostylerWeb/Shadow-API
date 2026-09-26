@@ -7,6 +7,7 @@ import { apiKeys } from "@shadowapi/db/schema";
 export type AuthContext = {
   tenantId: string;
   apiKeyId: string;
+  keyName: string;
   scopes: string[];
 };
 
@@ -49,6 +50,7 @@ export async function authenticateRequest(
   return {
     tenantId: row.tenantId,
     apiKeyId: row.id,
+    keyName: row.name,
     scopes: row.scopes ?? [],
   };
 }

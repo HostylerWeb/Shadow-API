@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPageIntent, canPublish, guessTemplatingSample, pendingIntentUrl } from "../src/teach/session.js";
+import { applyPageIntent, canPublish, emptyTeachSession, guessTemplatingSample, isReadOnlyWorkflow, pendingIntentUrl } from "../src/teach/session.js";
 
 test("pendingIntentUrl blocks until labeled", () => {
   const state = applyPageIntent(
@@ -21,7 +21,16 @@ test("guessTemplatingSample picks new query param", () => {
   assert.equal(sample, "acme");
 });
 
-import { applyPageIntent, canPublish, guessTemplatingSample, pendingIntentUrl } from "../src/teach/session.js";
+test("isReadOnlyWorkflow is false until result URL is set", () => {
+  const startOnly = emptyTeachSession("https://example.com/");
+  assert.equal(isReadOnlyWorkflow(startOnly), false);
+  const read = applyPageIntent(
+    applyPageIntent(startOnly, "https://example.com/", "start"),
+    "https://example.com/",
+    "result",
+  );
+  assert.equal(isReadOnlyWorkflow(read), true);
+});
 
 test("canPublish requires non-empty preview for marked_list", () => {
   const base = {
@@ -41,4 +50,29 @@ test("canPublish requires non-empty preview for marked_list", () => {
   };
   assert.equal(canPublish(base), true);
   assert.equal(canPublish({ ...base, previewRows: [{ name: "" }] }), false);
+});
+
+test("canPublish accepts composite with preview payload", () => {
+  const base = {
+    pagesByKey: {},
+    startUrl: "https://example.com/",
+    resultUrl: "https://example.com/",
+    actionUrl: "",
+    inputSelector: "",
+    pattern: "P1" as const,
+    templatingSample: "",
+    extract: {
+      kind: "composite" as const,
+      blocks: [
+        {
+          type: "list" as const,
+          key: "items",
+          row_selector: "li",
+          fields: [{ key: "field_1", selector: "a" }],
+        },
+      ],
+    },
+    previewPayload: { items: [{ field_1: "x" }] },
+  };
+  assert.equal(canPublish(base), true);
 });

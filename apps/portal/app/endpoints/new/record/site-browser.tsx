@@ -1,14 +1,19 @@
 "use client";
 
 import { requestRowCount, setTeachHighlight } from "../../../../src/teach/iframe-bridge";
-import { buildListExtract, buildPageExtract, buildSingleExtract, newTeachField, nextFieldKey, nextFormInputKey } from "../../../../src/teach/mapping";
+import { buildCompositeExtract } from "../../../../src/teach/build-spec";
+import type { ExtractBlock } from "@shadowapi/teach-extract";
+import { isCompositeExtract } from "@shadowapi/teach-extract";
+import { newTeachField, nextFieldKey, nextFormInputKey } from "../../../../src/teach/mapping";
 import type { PageIntent, PickPayload, TeachField } from "../../../../src/teach/protocol";
+import type { SavedTeachDraft } from "../../../../src/teach/saved-draft";
 import { normalizePageKey, pageKeysMatch } from "../../../../src/teach/protocol";
 import {
   applyPageIntent,
   canPublish,
   emptyTeachSession,
   hasResultPage,
+  isReadOnlyWorkflow,
   lookupKind,
   pendingIntentUrl,
   type TeachSessionState,
@@ -21,8 +26,10 @@ import { TeachFieldList } from "./teach-field-list";
 import { computeTeachGuide, TeachNextStep, TeachProgressBar } from "./teach-guide";
 import { TeachPickConfirm } from "./teach-pick-confirm";
 import { TeachOutputFieldsBlock } from "./teach-output-fields";
+import { TeachResponseBuilder } from "./teach-response-builder";
 import { TeachRowBlock } from "./teach-row-block";
 import { TeachStep2Callout } from "./teach-step2-callout";
+import { TeachPageRecorder, type RecordedAction } from "./teach-page-recorder";
 import { isPicking, pickModeLabel, syncPickModeOnLoad, useTeachPicker, type PickMode } from "./use-teach-picker";
 
 type ResultShape = "list" | "single" | "object";
@@ -39,18 +46,64 @@ function targetFromFrame(frame: HTMLIFrameElement, fallback: string): string {
   return fallback;
 }
 
+function elementPreview(el: Element): string {
+  const img = el.tagName === "IMG" ? el : el.querySelector("img");
+  if (img instanceof HTMLImageElement) {
+    const src = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+    if (src) return src;
+  }
+  const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  if (text) return text;
+  const anchor = el.closest("a[href]");
+  const href = anchor?.getAttribute("href") || "";
+  return href && !href.startsWith("#") ? href : "";
+}
+
+function valueForKey(node: unknown, key: string): string {
+  if (!node || typeof node !== "object") return "";
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = valueForKey(item, key);
+      if (hit) return hit;
+    }
+    return "";
+  }
+  const record = node as Record<string, unknown>;
+  if (typeof record[key] === "string" && record[key]) return record[key];
+  for (const value of Object.values(record)) {
+    if (value && typeof value === "object") {
+      const hit = valueForKey(value, key);
+      if (hit) return hit;
+    }
+  }
+  return "";
+}
+
+function applySamples(fields: TeachField[], payload: Record<string, unknown>): TeachField[] {
+  let changed = false;
+  const next = fields.map((field) => {
+    const value = valueForKey(payload, field.key);
+    if (!value || value === field.sampleText) return field;
+    changed = true;
+    return { ...field, sampleText: value };
+  });
+  return changed ? next : fields;
+}
+
 export function SiteBrowser({
   action,
   title,
   description,
   url,
   showError,
+  saved,
 }: {
   action: (formData: FormData) => void;
   title: string;
   description: string;
   url: string;
   showError?: boolean;
+  saved?: SavedTeachDraft | null;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const sampleOutput = useRef<HTMLInputElement>(null);
@@ -58,22 +111,42 @@ export function SiteBrowser({
   const formFieldsJson = useRef<HTMLInputElement>(null);
   const [currentUrl, setCurrentUrl] = useState(url);
   const [draftUrl, setDraftUrl] = useState(url);
-  const [session, setSession] = useState<TeachSessionState>(() => emptyTeachSession(url));
-  const [resultShape, setResultShape] = useState<ResultShape>("list");
+  const [session, setSession] = useState<TeachSessionState>(() => saved?.session ?? emptyTeachSession(url));
+  const [resultShape, setResultShape] = useState<ResultShape>(saved?.resultShape ?? "list");
   const [pickMode, setPickMode] = useState<PickMode>({ kind: "idle" });
+  const [guideOpen, setGuideOpen] = useState(true);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
+  const [dockBox, setDockBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [recordPhase, setRecordPhase] = useState<"idle" | "recording" | "paste" | "confirm">("idle");
+  const [recordedActions, setRecordedActions] = useState<RecordedAction[]>([]);
+  const [pasteUrl, setPasteUrl] = useState("");
+  const [teachStages, setTeachStages] = useState<Array<{ url: string; fields: Array<{ key: string; selector: string }>; clickSelector?: string }>>(
+    saved?.stages ?? [],
+  );
+  const stageKey = useRef(1);
   const [pendingPick, setPendingPick] = useState<PendingPick | null>(null);
   const [addAnother, setAddAnother] = useState(false);
-  const [rowSelector, setRowSelector] = useState("");
-  const [fields, setFields] = useState<TeachField[]>([]);
-  const [formFields, setFormFields] = useState<TeachField[]>([]);
-  const [outputName, setOutputName] = useState("result");
+  const [rowSelector, setRowSelector] = useState(saved?.rowSelector ?? "");
+  const [fields, setFields] = useState<TeachField[]>(saved?.fields ?? []);
+  const [formFields, setFormFields] = useState<TeachField[]>(saved?.formFields ?? []);
+  const [outputName, setOutputName] = useState(saved?.outputName ?? "value");
+  const [listArrayKey, setListArrayKey] = useState(saved?.listArrayKey ?? "items");
+  const [extraBlocks, setExtraBlocks] = useState<ExtractBlock[]>(saved?.extraBlocks ?? []);
+  const [submitSelector, setSubmitSelector] = useState(saved?.submitSelector ?? "");
+  const [requiresSession, setRequiresSession] = useState(saved?.requiresSession ?? false);
   const [rowCount, setRowCount] = useState<number | null>(null);
 
   const extract = useMemo(() => {
-    if (resultShape === "list") return buildListExtract(rowSelector, fields);
-    if (resultShape === "object") return buildPageExtract(fields);
-    return buildSingleExtract(fields);
-  }, [resultShape, rowSelector, fields]);
+    return buildCompositeExtract({
+      resultShape,
+      listArrayKey,
+      rowSelector,
+      fields,
+      outputName,
+      extraBlocks,
+    });
+  }, [resultShape, listArrayKey, rowSelector, fields, outputName, extraBlocks]);
 
   const canSample =
     resultShape === "list"
@@ -81,22 +154,46 @@ export function SiteBrowser({
       : Boolean(fields.some((f) => f.selector));
 
   const intentPending = pendingIntentUrl(session, currentUrl);
+  const pageKey = normalizePageKey(currentUrl);
+  const labeledIntent = session.pagesByKey[pageKey];
+  const canMarkResultHere =
+    !hasResultPage(session) &&
+    pageKeysMatch(session.startUrl || url, currentUrl) &&
+    (labeledIntent === "start" || labeledIntent === "skip" || labeledIntent === "action");
   const onResultPage =
     hasResultPage(session) && pageKeysMatch(session.resultUrl, currentUrl);
   const onActionPage = Boolean(session.actionUrl) && pageKeysMatch(session.actionUrl, currentUrl);
-  const showFormSection = Boolean(session.actionUrl) && !onResultPage;
+  const readOnlyWorkflow = isReadOnlyWorkflow(session);
+  const showFormSection = !readOnlyWorkflow && Boolean(session.actionUrl) && !onResultPage;
   const awaitingResultLabel = !hasResultPage(session) && (formFields.length > 0 || Boolean(session.actionUrl));
 
-  const { rows: sampleRows, error: sampleError, loading: sampleLoading, refresh: refreshSample } = useDebouncedSample(
+  const { rows: sampleRows, previewPayload, error: sampleError, loading: sampleLoading, refresh: refreshSample } = useDebouncedSample(
     frame,
     extract,
     onResultPage && canSample,
   );
 
+  const fieldSamples = useMemo(() => {
+    const samples: Record<string, string> = {};
+    if (!previewPayload) return samples;
+    for (const field of fields) {
+      const value = valueForKey(previewPayload, field.key);
+      if (value) samples[field.key] = value;
+    }
+    return samples;
+  }, [previewPayload, fields]);
+
   const mergedSession = useMemo(
-    (): TeachSessionState => ({ ...session, extract, previewRows: sampleRows }),
-    [session, extract, sampleRows],
+    (): TeachSessionState => ({
+      ...session,
+      extract,
+      previewRows: extract && isCompositeExtract(extract) ? undefined : sampleRows,
+      previewPayload: previewPayload ?? undefined,
+    }),
+    [session, extract, sampleRows, previewPayload],
   );
+
+  const userPickedShape = useRef(false);
 
   useTeachPicker({
     frame,
@@ -112,7 +209,22 @@ export function SiteBrowser({
     },
     pickMode,
     setPickMode,
+    onRecorded: (action) => {
+      if (pickMode.kind !== "record") return;
+      setRecordedActions((prev) => {
+        if (action.action === "fill") {
+          const rest = prev.filter((item) => !(item.action === "fill" && item.selector === action.selector));
+          return [...rest, action];
+        }
+        return [...prev, action];
+      });
+    },
   });
+
+  useEffect(() => {
+    if (!previewPayload) return;
+    setFields((prev) => applySamples(prev, previewPayload));
+  }, [previewPayload]);
 
   useEffect(() => {
     if (!rowSelector || !onResultPage || resultShape !== "list" || !frame.current) {
@@ -157,11 +269,52 @@ export function SiteBrowser({
     const resolved = targetFromFrame(node, currentUrl);
     setCurrentUrl(resolved);
     setDraftUrl(resolved);
+    const read = () => {
+      refreshSample();
+      const doc = node.contentDocument;
+      if (!doc) return;
+      setFields((prev) => {
+        const root = rowSelector ? doc.querySelector(rowSelector) : doc.documentElement;
+        if (!root) return prev;
+        let changed = false;
+        const next = prev.map((field) => {
+          const el = root.querySelector(field.selector);
+          const value = el ? elementPreview(el) : "";
+          if (!value || value === field.sampleText) return field;
+          changed = true;
+          return { ...field, sampleText: value };
+        });
+        return changed ? next : prev;
+      });
+    };
+    read();
+    window.setTimeout(read, 700);
+  }
+
+  function commitRecordedPage(pageUrl: string) {
+    const fields: Array<{ key: string; selector: string }> = [];
+    let clickSelector: string | undefined;
+    for (const action of recordedActions) {
+      if (action.action === "fill" && action.selector) {
+        fields.push({ key: `field_${stageKey.current++}`, selector: action.selector });
+      }
+      if (action.action === "click" && action.selector) clickSelector = action.selector;
+    }
+    const next = [...teachStages, { url: pageUrl, fields, clickSelector }];
+    setTeachStages(next);
+    setFormFields(next.flatMap((stage) => stage.fields).map((field) => newTeachField({ key: field.key, selector: field.selector })));
+    const lastClick = [...next].reverse().find((stage) => stage.clickSelector)?.clickSelector ?? "";
+    setSubmitSelector(lastClick);
+    setRecordedActions([]);
+    return next;
   }
 
   function labelPage(intent: PageIntent) {
-    if (!intentPending) return;
-    setSession((s) => applyPageIntent(s, intentPending, intent));
+    const targetUrl =
+      intentPending ??
+      (canMarkResultHere && intent === "result" ? currentUrl : null);
+    if (!targetUrl) return;
+    setSession((s) => applyPageIntent(s, targetUrl, intent));
   }
 
   function confirmPendingPick() {
@@ -234,6 +387,21 @@ export function SiteBrowser({
             : f,
         ),
       );
+      return;
+    }
+    if (mode.kind === "pickSubmit") {
+      setSubmitSelector(payload.selector);
+      return;
+    }
+    if (mode.kind === "pickExtraScalar") {
+      setExtraBlocks((prev) =>
+        prev.map((block, index) =>
+          index === mode.blockIndex && block.type === "scalar"
+            ? { ...block, selector: payload.selector }
+            : block,
+        ),
+      );
+      return;
     }
   }
 
@@ -243,12 +411,16 @@ export function SiteBrowser({
       return;
     }
     let sample = "";
-    if (resultShape === "list") sample = JSON.stringify(sampleRows.slice(0, 5));
+    if (extract && isCompositeExtract(extract) && previewPayload) {
+      sample = JSON.stringify(previewPayload);
+    } else if (resultShape === "list") sample = JSON.stringify(sampleRows.slice(0, 5));
     else if (resultShape === "object") sample = JSON.stringify(sampleRows[0] ?? {});
     else sample = sampleRows[0]?.[outputName] ?? sampleRows[0]?.result ?? "";
     if (sampleOutput.current) sampleOutput.current.value = sample;
     if (extractJson.current && extract) extractJson.current.value = JSON.stringify(extract);
     if (formFieldsJson.current) formFieldsJson.current.value = JSON.stringify(formFields.map(({ key, selector }) => ({ key, selector })));
+    const stagesInput = document.querySelector<HTMLInputElement>('input[name="stagesJson"]');
+    if (stagesInput) stagesInput.value = JSON.stringify(teachStages);
   }
 
   const picking = isPicking(pickMode);
@@ -260,6 +432,7 @@ export function SiteBrowser({
     resultShape === "list" ? "marked_list" : resultShape === "object" ? "marked_page" : "marked_single";
 
   const guide = computeTeachGuide({
+    readOnlyWorkflow,
     intentPending: Boolean(intentPending),
     onActionPage,
     onResultPage,
@@ -280,6 +453,7 @@ export function SiteBrowser({
   return (
     <form action={action} className="teach-shell card" onSubmit={beforePublish}>
       <div className="teach-shell-inner">
+      {saved?.connectorId ? <input type="hidden" name="connectorId" value={saved.connectorId} /> : null}
       <input type="hidden" name="title" value={title} />
       <input type="hidden" name="description" value={description} />
       <input type="hidden" name="url1" value={url1} />
@@ -291,8 +465,11 @@ export function SiteBrowser({
       <input ref={sampleOutput} type="hidden" name="sampleOutput" defaultValue="" />
       <input ref={extractJson} type="hidden" name="extractJson" defaultValue="" />
       <input ref={formFieldsJson} type="hidden" name="formFieldsJson" defaultValue="[]" />
+      <input type="hidden" name="stagesJson" value={JSON.stringify(teachStages)} />
       <input type="hidden" name="extractMode" value={extractMode} />
-      <input type="hidden" name="outputName" value={resultShape === "list" ? "results" : outputName} />
+      <input type="hidden" name="outputName" value={resultShape === "list" ? listArrayKey : outputName} />
+      <input type="hidden" name="submitSelector" value={submitSelector} />
+      <input type="hidden" name="requiresSession" value={requiresSession ? "1" : ""} />
       <input type="hidden" name="inputSelector" value={session.inputSelector} />
 
       {showError ? <p className="banner">Publish failed last time. Check your labels and marks, then try again.</p> : null}
@@ -305,13 +482,15 @@ export function SiteBrowser({
         <div className="teach-now-banner" role="status">
           <p className="teach-now-banner-kicker">Step 2 complete — your field is saved</p>
           <p className="teach-now-banner-text">
-            <strong>Now:</strong> In the embedded website, run a real search (type a name and press Search).
-            When the <strong>results page</strong> opens, click <strong>“This page shows the answers”</strong> — that starts step 3.
+            <strong>Now:</strong> Open the results in a normal browser tab if the preview will not finish the search
+            (captcha or bot checks). Paste that results address into the box above, press Go, then click{" "}
+            <strong>“This page shows the answers”</strong> — that starts step 3. Live lookups run as jobs, not in this preview.
           </p>
         </div>
       ) : null}
 
       <div
+        ref={layoutRef}
         className={`teach-layout teach-layout-split${step2FieldMapped ? " teach-layout-website-first" : ""}`}
       >
         <div className="teach-browser">
@@ -341,7 +520,62 @@ export function SiteBrowser({
           <iframe ref={frame} className="browser-frame" title={title} src={mirrorBrowseHref(url)} onLoad={onFrameLoad} />
         </div>
 
-        <div className="teach-side">
+        <aside
+          ref={dockRef}
+          className={`teach-side teach-dock${guideOpen ? " open" : ""}${dockBox ? " placed" : ""}`}
+          style={dockBox ? { left: dockBox.left, top: dockBox.top, width: dockBox.width, height: guideOpen ? dockBox.height : undefined } : undefined}
+        >
+          <div className="teach-dock-bar">
+            <button
+              type="button"
+              className="teach-dock-grip"
+              aria-label="Drag guide"
+              onPointerDown={(event) => {
+                const dock = dockRef.current;
+                const layout = layoutRef.current;
+                if (!dock || !layout) return;
+                const layoutBox = layout.getBoundingClientRect();
+                const box = dock.getBoundingClientRect();
+                const origin = {
+                  x: event.clientX,
+                  y: event.clientY,
+                  left: dockBox?.left ?? box.left - layoutBox.left,
+                  top: dockBox?.top ?? box.top - layoutBox.top,
+                  width: dockBox?.width ?? box.width,
+                  height: dockBox?.height ?? box.height,
+                };
+                const handle = event.currentTarget;
+                event.preventDefault();
+                handle.setPointerCapture(event.pointerId);
+                let next = origin;
+                const move = (ev: PointerEvent) => {
+                  const bounds = layout.getBoundingClientRect();
+                  const left = Math.min(Math.max(0, origin.left + ev.clientX - origin.x), Math.max(0, bounds.width - origin.width));
+                  const top = Math.min(Math.max(0, origin.top + ev.clientY - origin.y), Math.max(0, bounds.height - 36));
+                  next = { left, top, width: origin.width, height: origin.height };
+                  dock.style.right = "auto";
+                  dock.style.left = `${next.left}px`;
+                  dock.style.top = `${next.top}px`;
+                  dock.style.width = `${next.width}px`;
+                  dock.style.height = `${next.height}px`;
+                };
+                const up = () => {
+                  handle.removeEventListener("pointermove", move);
+                  handle.removeEventListener("pointerup", up);
+                  handle.removeEventListener("pointercancel", up);
+                  setDockBox(next);
+                };
+                handle.addEventListener("pointermove", move);
+                handle.addEventListener("pointerup", up);
+                handle.addEventListener("pointercancel", up);
+              }}
+            >
+              Move
+            </button>
+            <button type="button" className="teach-dock-toggle" onClick={() => setGuideOpen((open) => !open)}>
+              {guideOpen ? "Hide guide" : "Show guide"}
+            </button>
+          </div>
           {pendingPick ? (
             <TeachPickConfirm
               mode={pendingPick.mode}
@@ -352,6 +586,16 @@ export function SiteBrowser({
           ) : null}
 
           {!hideGuideHero && !pendingPick ? <TeachNextStep headline={guide.headline} detail={guide.detail} /> : null}
+
+          {canMarkResultHere && !intentPending && !pendingPick ? (
+            <section className="teach-intent review-block teach-intent-prominent">
+              <h3>Same page for answers?</h3>
+              <p className="muted">This URL is your starting point. If the API reads this page directly, mark it as the answers page.</p>
+              <button type="button" className="btn-primary" onClick={() => labelPage("result")}>
+                This page shows the answers
+              </button>
+            </section>
+          ) : null}
 
           {intentPending && !pendingPick ? (
             <section className="teach-intent review-block teach-intent-prominent">
@@ -372,7 +616,40 @@ export function SiteBrowser({
             </section>
           ) : null}
 
-          {showFormSection && !intentPending && !pendingPick && formFields.length === 0 ? (
+          {showFormSection && !intentPending && !pendingPick ? (
+            <TeachPageRecorder
+              phase={recordPhase}
+              actions={recordedActions}
+              pasteUrl={pasteUrl}
+              onPasteUrl={setPasteUrl}
+              onStart={() => {
+                setRecordedActions([]);
+                setRecordPhase("recording");
+                setPickMode({ kind: "record" });
+              }}
+              onStop={() => {
+                setPickMode({ kind: "idle" });
+                setRecordPhase("paste");
+              }}
+              onContinuePaste={() => setRecordPhase("confirm")}
+              onFinalYes={() => {
+                commitRecordedPage(currentUrl);
+                const next = pasteUrl.trim();
+                goToBrowseUrl(next);
+                setSession((s) => applyPageIntent(s, next, "result"));
+                setRecordPhase("idle");
+                setPasteUrl("");
+              }}
+              onFinalNo={() => {
+                commitRecordedPage(currentUrl);
+                goToBrowseUrl(pasteUrl.trim());
+                setRecordPhase("idle");
+                setPasteUrl("");
+              }}
+            />
+          ) : null}
+
+          {showFormSection && !intentPending && !pendingPick && formFields.length === 0 && recordPhase === "idle" ? (
             <TeachStep2Callout
               fieldCount={formFields.length}
               pickMode={pickMode}
@@ -418,15 +695,26 @@ export function SiteBrowser({
               >
                 + Map another form field
               </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={picking || Boolean(pendingPick) || !onActionPage}
+                onClick={() => setPickMode({ kind: "pickSubmit" })}
+              >
+                Pick submit control
+              </button>
+              {submitSelector ? <p className="muted">Submit: {submitSelector}</p> : null}
             </section>
           ) : null}
 
           {onResultPage ? (
             <>
               <section className="review-block teach-step3-intro">
-                <h3>Step 3 · Build your API response</h3>
+                <h3>{saved ? "Saved response" : "Step 3 · Build your API response"}</h3>
                 <p className="muted">
-                  Choose what shape the JSON takes, then click parts of the results page. Watch the preview update on the right.
+                  {saved
+                    ? "These are the fields already published. Rename a key, drag to reorder, delete one, or click the page to add another. Publish again to save."
+                    : "Choose what shape the JSON takes, then click parts of the results page. Watch the preview update on the right."}
                 </p>
                 <p className="teach-step3-type-label">Response shape</p>
                 <div className="teach-shape-cards" role="radiogroup" aria-label="API return type">
@@ -434,16 +722,22 @@ export function SiteBrowser({
                     type="button"
                     className={`teach-shape-card${resultShape === "list" ? " selected" : ""}`}
                     disabled={picking}
-                    onClick={() => setResultShape("list")}
+                    onClick={() => {
+                      userPickedShape.current = true;
+                      setResultShape("list");
+                    }}
                   >
                     <strong>List of rows</strong>
-                    <span>Many similar items (search results, product lists)</span>
+                    <span>Many similar items in a repeating pattern</span>
                   </button>
                   <button
                     type="button"
                     className={`teach-shape-card${resultShape === "object" ? " selected" : ""}`}
                     disabled={picking}
-                    onClick={() => setResultShape("object")}
+                    onClick={() => {
+                      userPickedShape.current = true;
+                      setResultShape("object");
+                    }}
                   >
                     <strong>Several fields on one page</strong>
                     <span>No repeating row — pick each value separately</span>
@@ -452,12 +746,21 @@ export function SiteBrowser({
                     type="button"
                     className={`teach-shape-card${resultShape === "single" ? " selected" : ""}`}
                     disabled={picking}
-                    onClick={() => setResultShape("single")}
+                    onClick={() => {
+                      userPickedShape.current = true;
+                      setResultShape("single");
+                    }}
                   >
                     <strong>One text value</strong>
                     <span>A single headline, price, or status line</span>
                   </button>
                 </div>
+                {resultShape === "list" ? (
+                  <label style={{ display: "block", marginTop: "0.75rem" }}>
+                    JSON array key
+                    <input value={listArrayKey} onChange={(e) => setListArrayKey(e.target.value)} disabled={picking} />
+                  </label>
+                ) : null}
                 {resultShape === "single" ? (
                   <label style={{ display: "block", marginTop: "0.75rem" }}>
                     Name in JSON
@@ -483,6 +786,7 @@ export function SiteBrowser({
 
               <TeachOutputFieldsBlock
                 fields={fields}
+                samples={fieldSamples}
                 resultShape={resultShape}
                 hasRow={Boolean(rowSelector)}
                 picking={picking}
@@ -495,6 +799,20 @@ export function SiteBrowser({
                 onRepick={(id) => setPickMode({ kind: "pickReplaceField", fieldId: id })}
                 onReorder={reorderFields}
               />
+              <TeachResponseBuilder blocks={extraBlocks} onChange={setExtraBlocks} disabled={picking || Boolean(pendingPick)} />
+              {extraBlocks.map((block, index) =>
+                block.type === "scalar" && !block.selector ? (
+                  <button
+                    key={`pick-extra-${index}`}
+                    type="button"
+                    className="btn-ghost"
+                    disabled={picking || Boolean(pendingPick)}
+                    onClick={() => setPickMode({ kind: "pickExtraScalar", blockIndex: index })}
+                  >
+                    Pick selector for {block.key}
+                  </button>
+                ) : null,
+              )}
             </>
           ) : hasResultPage(session) && !showFormSection ? (
             <p className="muted review-block">Step 3 · Navigate to your results page in the website on the left to map outputs.</p>
@@ -516,7 +834,9 @@ export function SiteBrowser({
             <TeachApiPreview
               resultShape={resultShape}
               outputName={outputName}
+              listArrayKey={listArrayKey}
               rows={sampleRows}
+              previewPayload={previewPayload}
               loading={sampleLoading}
               error={sampleError}
               totalRows={rowCount ?? undefined}
@@ -532,6 +852,14 @@ export function SiteBrowser({
 
         {!pendingPick && canPublish(mergedSession) ? (
           <div className="teach-publish-bar">
+            <label className="teach-session-toggle">
+              <input
+                type="checkbox"
+                checked={requiresSession}
+                onChange={(e) => setRequiresSession(e.target.checked)}
+              />
+              Site needs a saved login session (vault)
+            </label>
             <button type="submit" className="btn-primary">
               Publish and test
             </button>
@@ -540,7 +868,91 @@ export function SiteBrowser({
         ) : !pendingPick && onResultPage ? (
           <p className="teach-publish-locked muted">Finish step 3 until the JSON preview looks right — then publish unlocks.</p>
         ) : null}
-        </div>
+          {guideOpen
+            ? (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const).map((edge) => (
+                <button
+                  key={edge}
+                  type="button"
+                  className={`teach-dock-resize teach-dock-resize-${edge}`}
+                  aria-label={`Resize guide from ${edge}`}
+                  onPointerDown={(event) => {
+                    const dock = dockRef.current;
+                    const layout = layoutRef.current;
+                    if (!dock || !layout) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const layoutBox = layout.getBoundingClientRect();
+                    const box = dock.getBoundingClientRect();
+                    const origin = {
+                      x: event.clientX,
+                      y: event.clientY,
+                      left: dockBox?.left ?? box.left - layoutBox.left,
+                      top: dockBox?.top ?? box.top - layoutBox.top,
+                      width: dockBox?.width ?? box.width,
+                      height: dockBox?.height ?? box.height,
+                    };
+                    const handle = event.currentTarget;
+                    handle.setPointerCapture(event.pointerId);
+                    let next = origin;
+                    const move = (ev: PointerEvent) => {
+                      const bounds = layout.getBoundingClientRect();
+                      const dx = ev.clientX - origin.x;
+                      const dy = ev.clientY - origin.y;
+                      let left = origin.left;
+                      let top = origin.top;
+                      let width = origin.width;
+                      let height = origin.height;
+                      if (edge.includes("e")) width = origin.width + dx;
+                      if (edge.includes("s")) height = origin.height + dy;
+                      if (edge.includes("w")) {
+                        width = origin.width - dx;
+                        left = origin.left + dx;
+                      }
+                      if (edge.includes("n")) {
+                        height = origin.height - dy;
+                        top = origin.top + dy;
+                      }
+                      const minW = 240;
+                      const minH = 160;
+                      if (width < minW) {
+                        if (edge.includes("w")) left -= minW - width;
+                        width = minW;
+                      }
+                      if (height < minH) {
+                        if (edge.includes("n")) top -= minH - height;
+                        height = minH;
+                      }
+                      if (left < 0) {
+                        width += left;
+                        left = 0;
+                      }
+                      if (top < 0) {
+                        height += top;
+                        top = 0;
+                      }
+                      width = Math.min(width, Math.max(minW, bounds.width - left));
+                      height = Math.min(height, Math.max(minH, bounds.height - top));
+                      next = { left, top, width, height };
+                      dock.style.right = "auto";
+                      dock.style.left = `${left}px`;
+                      dock.style.top = `${top}px`;
+                      dock.style.width = `${width}px`;
+                      dock.style.height = `${height}px`;
+                    };
+                    const up = () => {
+                      handle.removeEventListener("pointermove", move);
+                      handle.removeEventListener("pointerup", up);
+                      handle.removeEventListener("pointercancel", up);
+                      setDockBox(next);
+                    };
+                    handle.addEventListener("pointermove", move);
+                    handle.addEventListener("pointerup", up);
+                    handle.addEventListener("pointercancel", up);
+                  }}
+                />
+              ))
+            : null}
+        </aside>
       </div>
       </div>
     </form>

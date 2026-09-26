@@ -5,13 +5,14 @@ type ResultShape = "list" | "single" | "object";
 type Props = {
   resultShape: ResultShape;
   outputName: string;
+  listArrayKey: string;
   rows: Record<string, string>[];
+  previewPayload: Record<string, unknown> | null;
   loading: boolean;
   error: string;
   totalRows?: number;
   onRefresh: () => void;
   canSample: boolean;
-  resultShapeList: boolean;
   hasRow: boolean;
   fieldCount: number;
 };
@@ -19,7 +20,9 @@ type Props = {
 export function TeachApiPreview({
   resultShape,
   outputName,
+  listArrayKey,
   rows,
+  previewPayload,
   loading,
   error,
   totalRows,
@@ -28,12 +31,12 @@ export function TeachApiPreview({
   hasRow,
   fieldCount,
 }: Props) {
-  const preview = buildPreview(resultShape, outputName, rows);
+  const preview = buildPreview(resultShape, outputName, listArrayKey, rows, previewPayload);
 
   let emptyHelp: string | null = null;
   if (!canSample) {
     if (resultShape === "list" && !hasRow) {
-      emptyHelp = "After you set a result row and add fields, your API JSON will appear here.";
+      emptyHelp = "After you set a repeating row and add fields, your API JSON will appear here.";
     } else if (resultShape === "list" && fieldCount === 0) {
       emptyHelp = "Add output fields from the page — the preview updates automatically.";
     } else {
@@ -62,10 +65,20 @@ export function TeachApiPreview({
   );
 }
 
-function buildPreview(resultShape: ResultShape, outputName: string, rows: Record<string, string>[]): string {
+function buildPreview(
+  resultShape: ResultShape,
+  outputName: string,
+  listArrayKey: string,
+  rows: Record<string, string>[],
+  previewPayload: Record<string, unknown> | null,
+): string {
+  if (previewPayload) {
+    return JSON.stringify(previewPayload, null, 2);
+  }
   if (resultShape === "list") {
-    if (rows.length === 0) return '{\n  "results": []\n}';
-    return JSON.stringify({ results: rows.slice(0, 3) }, null, 2);
+    const key = listArrayKey.trim() || "items";
+    if (rows.length === 0) return JSON.stringify({ [key]: [] }, null, 2);
+    return JSON.stringify({ [key]: rows.slice(0, 3) }, null, 2);
   }
   if (resultShape === "object") {
     return JSON.stringify(rows[0] ?? {}, null, 2);

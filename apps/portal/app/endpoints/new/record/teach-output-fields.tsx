@@ -5,6 +5,7 @@ import { TeachFieldList } from "./teach-field-list";
 
 type Props = {
   fields: TeachField[];
+  samples?: Record<string, string>;
   resultShape: "list" | "single" | "object";
   hasRow: boolean;
   picking: boolean;
@@ -20,6 +21,7 @@ type Props = {
 
 export function TeachOutputFieldsBlock({
   fields,
+  samples,
   resultShape,
   hasRow,
   picking,
@@ -45,8 +47,7 @@ export function TeachOutputFieldsBlock({
           <p className="teach-step-panel-lead">
             {resultShape === "list" ? (
               <>
-                For each row, pick what to extract — e.g. company name, number, address. Each pick becomes a key in{" "}
-                <code>results[]</code>.
+                For each row, pick what to extract. Each pick becomes a key under your list array in the JSON.
               </>
             ) : (
               <>Click each piece of text you want in the API response. Each pick becomes one JSON key.</>
@@ -75,6 +76,7 @@ export function TeachOutputFieldsBlock({
           <h4 className="teach-step-panel-fields-title">Mapped output fields</h4>
           <TeachFieldList
             fields={fields}
+            samples={samples}
             disabled={disabled}
             emptyMessage=""
             onRename={onRename}

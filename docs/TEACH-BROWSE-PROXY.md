@@ -1,5 +1,7 @@
 # Teach site browser and browse proxy
 
+Authoring rules (generic keys, extract primitives): [TEACH-AUTHORING.md](./TEACH-AUTHORING.md).
+
 ShadowAPI’s teach flow loads customer sites inside an iframe on the portal (for example `http://localhost:3001/endpoints/new/record`). The iframe does not navigate to the third-party origin directly. It uses a **same-origin browse proxy** so the portal can inject teach tooling, rewrite asset URLs, and keep cookies/session on the portal.
 
 This document summarizes problems we hit when proxying **single-page apps (SPAs)** such as [7daysperformance.co.uk](https://7daysperformance.co.uk/), and how they were fixed. The intent is **generic** behavior for path-based routers and typical asset layouts—not one-off hacks for a single hostname.

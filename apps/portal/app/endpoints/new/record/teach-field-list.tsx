@@ -4,6 +4,7 @@ import type { TeachField } from "../../../../src/teach/protocol";
 
 type Props = {
   fields: TeachField[];
+  samples?: Record<string, string>;
   disabled: boolean;
   emptyMessage?: string;
   onRename: (id: string, key: string) => void;
@@ -14,6 +15,7 @@ type Props = {
 
 export function TeachFieldList({
   fields,
+  samples,
   disabled,
   emptyMessage = "No fields yet.",
   onRename,
@@ -54,8 +56,8 @@ export function TeachFieldList({
             Key
             <input value={field.key} disabled={disabled} onChange={(e) => onRename(field.id, e.target.value)} />
           </label>
-          <span className="teach-field-sample" title={field.sampleText ?? ""}>
-            {field.sampleText ? truncate(field.sampleText, 48) : "No preview text — re-pick if wrong"}
+          <span className="teach-field-sample" title={samples?.[field.key] || field.sampleText || ""}>
+            {samples?.[field.key] || field.sampleText ? truncate(samples?.[field.key] || field.sampleText || "", 72) : "—"}
           </span>
           <div className="teach-field-actions">
             <button type="button" className="btn-link" disabled={disabled} onClick={() => onRepick(field.id)}>

@@ -2,6 +2,7 @@ import { detectNavigationPattern, type NavigationPattern } from "../navigation-p
 import type { MarkedExtract, MarkedListExtract, PageIntent } from "./protocol";
 import { normalizePageKey } from "./protocol";
 import { sampleHasValues } from "./mapping";
+import { compositeReady, extractHasNonEmptyOutput, isCompositeExtract, normalizeToComposite } from "@shadowapi/teach-extract";
 
 export type TeachSessionState = {
   pagesByKey: Record<string, PageIntent>;
@@ -12,8 +13,9 @@ export type TeachSessionState = {
   pattern: NavigationPattern;
   extract: MarkedExtract | null;
   templatingSample: string;
-  /** Set by UI when preview has loaded rows */
+  /** Set by UI when preview has loaded rows or composite object */
   previewRows?: Record<string, string>[];
+  previewPayload?: Record<string, unknown>;
 };
 
 export function emptyTeachSession(initialUrl: string): TeachSessionState {
@@ -80,6 +82,11 @@ export function hasResultPage(state: TeachSessionState): boolean {
   return Boolean(state.resultUrl);
 }
 
+export function isReadOnlyWorkflow(state: TeachSessionState): boolean {
+  if (!state.resultUrl) return false;
+  return normalizePageKey(state.startUrl) === normalizePageKey(state.resultUrl);
+}
+
 export function lookupKind(state: TeachSessionState): "read" | "lookup" {
   if (!state.resultUrl) return "read";
   if (normalizePageKey(state.startUrl) === normalizePageKey(state.resultUrl)) return "read";
@@ -93,6 +100,13 @@ export function listExtractReady(extract: MarkedExtract | null): extract is Mark
 export function canPublish(state: TeachSessionState): boolean {
   if (!state.resultUrl) return false;
   if (!state.extract) return false;
+  if (isCompositeExtract(state.extract)) {
+    if (!compositeReady(state.extract)) return false;
+    if (state.previewPayload !== undefined) {
+      return extractHasNonEmptyOutput(state.previewPayload);
+    }
+    return true;
+  }
   if (state.extract.kind === "marked_single") {
     return state.extract.selector.length > 0;
   }

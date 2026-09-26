@@ -22,35 +22,86 @@ export function teachInjectScript(pageUrl: string): string {
     return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
   }
 
+  function isNoiseClass(cls) {
+    if (!cls || cls.indexOf("shadow-teach") === 0) return true;
+    if (cls === "ng-star-inserted" || cls.indexOf("ng-") === 0) return true;
+    if (cls.indexOf("css-") === 0 || /^[a-z]{1,3}[0-9]+$/i.test(cls)) return false;
+    return false;
+  }
+
+  function stableClasses(el) {
+    var out = [];
+    if (!el || !el.classList) return out;
+    for (var i = 0; i < el.classList.length; i++) {
+      var cls = el.classList[i];
+      if (!isNoiseClass(cls)) out.push(cls);
+    }
+    return out;
+  }
+
+  function uniqueClassSelector(scope, el) {
+    var classes = stableClasses(el);
+    var tag = el.tagName ? el.tagName.toLowerCase() : "";
+    for (var i = 0; i < classes.length; i++) {
+      var sel = "." + cssEscape(classes[i]);
+      try {
+        var found = scope.querySelectorAll(sel);
+        if (found.length === 1 && found[0] === el) return sel;
+        if (tag) {
+          var tagged = tag + sel;
+          var taggedFound = scope.querySelectorAll(tagged);
+          if (taggedFound.length === 1 && taggedFound[0] === el) return tagged;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    return "";
+  }
+
+  function segmentFor(node, amongParent) {
+    var tag = node.tagName ? node.tagName.toLowerCase() : "div";
+    var classes = stableClasses(node);
+    var part = tag;
+    var distinctive = "";
+    if (amongParent) {
+      for (var i = 0; i < classes.length; i++) {
+        var shared = 0;
+        for (var c = 0; c < amongParent.children.length; c++) {
+          var child = amongParent.children[c];
+          var childClasses = stableClasses(child);
+          var has = false;
+          for (var k = 0; k < childClasses.length; k++) if (childClasses[k] === classes[i]) has = true;
+          if (has) shared++;
+        }
+        if (shared === 1) {
+          distinctive = classes[i];
+          break;
+        }
+      }
+    }
+    if (distinctive) return part + "." + cssEscape(distinctive);
+    if (classes.length) part += "." + cssEscape(classes[0]);
+    if (!amongParent) return part;
+    var same = 0;
+    var index = 0;
+    for (var j = 0; j < amongParent.children.length; j++) {
+      if (amongParent.children[j].tagName === node.tagName) {
+        same++;
+        if (amongParent.children[j] === node) index = same;
+      }
+    }
+    if (same > 1 && !distinctive) part += ":nth-of-type(" + index + ")";
+    return part;
+  }
+
   function cssSelector(el) {
     if (!el || el.nodeType !== 1) return "";
     if (el.id) return "#" + cssEscape(el.id);
+    var short = uniqueClassSelector(document, el);
+    if (short) return short;
     var parts = [];
     var node = el;
     while (node && node.nodeType === 1 && node !== document.documentElement) {
-      var part = node.tagName.toLowerCase();
-      if (node.classList && node.classList.length) {
-        var classes = [];
-        for (var i = 0; i < node.classList.length && classes.length < 3; i++) {
-          var cls = node.classList[i];
-          if (cls && cls.indexOf("shadow-teach") !== 0) classes.push("." + cssEscape(cls));
-        }
-        if (classes.length) part += classes.join("");
-      }
-      var parent = node.parentElement;
-      if (parent) {
-        var same = 0;
-        var index = 0;
-        for (var j = 0; j < parent.children.length; j++) {
-          var child = parent.children[j];
-          if (child.tagName === node.tagName) {
-            same++;
-            if (child === node) index = same;
-          }
-        }
-        if (same > 1) part += ":nth-of-type(" + index + ")";
-      }
-      parts.unshift(part);
+      parts.unshift(segmentFor(node, node.parentElement));
       if (node.id) break;
       node = node.parentElement;
     }
@@ -59,51 +110,79 @@ export function teachInjectScript(pageUrl: string): string {
 
   function relativeSelector(row, target) {
     if (!row || !target || !row.contains(target)) return cssSelector(target);
+    var short = uniqueClassSelector(row, target);
+    if (short) return short;
     var parts = [];
     var node = target;
     while (node && node !== row) {
-      var part = node.tagName.toLowerCase();
-      if (node.classList && node.classList.length) {
-        for (var c = 0; c < node.classList.length; c++) {
-          var cls = node.classList[c];
-          if (cls && cls.indexOf("shadow-teach") !== 0) {
-            part += "." + cssEscape(cls);
-            break;
-          }
-        }
-      }
-      var parent = node.parentElement;
-      if (parent && parent !== row) {
-        var same = 0;
-        var index = 0;
-        for (var i = 0; i < parent.children.length; i++) {
-          if (parent.children[i].tagName === node.tagName) {
-            same++;
-            if (parent.children[i] === node) index = same;
-          }
-        }
-        if (same > 1) part += ":nth-of-type(" + index + ")";
-      }
-      parts.unshift(part);
+      parts.unshift(segmentFor(node, node.parentElement && node.parentElement !== row ? node.parentElement : node.parentElement));
       node = node.parentElement;
     }
     return parts.join(" > ");
   }
 
   function generalizeRowSelector(el) {
-    var sel = cssSelector(el);
+    var tag = el.tagName ? el.tagName.toLowerCase() : "div";
+    var classes = stableClasses(el);
+    for (var c = 0; c < classes.length; c++) {
+      var candidate = tag + "." + cssEscape(classes[c]);
+      try {
+        if (document.querySelectorAll(candidate).length > 1) return candidate;
+      } catch (e) {}
+    }
+    try {
+      if (document.querySelectorAll(tag).length > 1) return tag;
+    } catch (e) {}
     var parent = el.parentElement;
-    if (!parent) return sel;
-    var tag = el.tagName.toLowerCase();
+    if (!parent) return cssSelector(el);
     var sig = tag;
-    if (el.classList && el.classList.length) sig += "." + cssEscape(el.classList[0]);
+    if (classes.length) sig += "." + cssEscape(classes[0]);
     var parentSel = cssSelector(parent);
     if (parentSel) return parentSel + " > " + sig;
-    return sel;
+    return cssSelector(el);
+  }
+
+  function publicUrl(raw) {
+    var href = raw;
+    try { href = new URL(raw, document.baseURI).href; } catch (e) { return raw; }
+    try {
+      var parsed = new URL(href);
+      if (parsed.pathname === "/api/browse" || parsed.pathname.slice(-11) === "/api/browse") {
+        var nested = parsed.searchParams.get("u");
+        if (nested && /^https?:/i.test(nested)) return nested;
+      }
+    } catch (e2) { /* keep */ }
+    return href;
   }
 
   function textOf(el) {
-    return (el && (el.textContent || "")).replace(/\\s+/g, " ").trim().slice(0, 200);
+    if (!el) return "";
+    var own = (el.textContent || "").replace(/\\s+/g, " ").trim();
+    var img = el.tagName === "IMG" ? el : (!own && el.querySelector ? el.querySelector("img") : null);
+    if (img) {
+      var srcset = img.getAttribute("srcset") || "";
+      var fromSet = srcset ? (srcset.split(",")[0] || "").trim().split(/\\s+/)[0] : "";
+      var raw = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || fromSet || "";
+      if (raw) return publicUrl(raw);
+    }
+    var anchor = el.closest ? el.closest("a[href]") : null;
+    if (anchor) {
+      var href = anchor.getAttribute("href") || "";
+      if (href && href.charAt(0) !== "#" && href.toLowerCase().indexOf("javascript:") !== 0) {
+        var nodes = anchor.querySelectorAll("*");
+        var leaves = [];
+        for (var i = 0; i < nodes.length; i++) {
+          var node = nodes[i];
+          if (node.children.length === 0 && (node.textContent || "").replace(/\\s+/g, " ").trim()) leaves.push(node);
+        }
+        var absHref = publicUrl(href);
+        var role = el.getAttribute ? el.getAttribute("role") : "";
+        if (el.tagName === "BUTTON" || role === "button" || role === "link") return absHref;
+        if (el === anchor && leaves.length > 1) return absHref;
+        if (el.children.length === 0 && leaves.length > 1 && leaves[leaves.length - 1] === el) return absHref;
+      }
+    }
+    return own.slice(0, 500);
   }
 
   function describePick(el) {
@@ -177,6 +256,42 @@ export function teachInjectScript(pageUrl: string): string {
     return { results: out };
   }
 
+  function sampleComposite(spec) {
+    var out = {};
+    for (var bi = 0; bi < spec.blocks.length; bi++) {
+      var block = spec.blocks[bi];
+      if (block.type === "scalar") {
+        var sel = block.selector.replace(/\.shadow-teach-hover\b/g, "").replace(/\.shadow-teach-active\b/g, "").trim();
+        var el = document.querySelector(sel);
+        out[block.key] = el ? textOf(el) : "";
+      } else if (block.type === "fields") {
+        for (var fi = 0; fi < block.fields.length; fi++) {
+          var fld = block.fields[fi];
+          var fsel = fld.selector.replace(/\.shadow-teach-hover\b/g, "").replace(/\.shadow-teach-active\b/g, "").trim();
+          var fel = document.querySelector(fsel);
+          out[fld.key] = fel ? textOf(fel) : "";
+        }
+      } else if (block.type === "list") {
+        var rowSel = block.row_selector.replace(/\.shadow-teach-hover\b/g, "").replace(/\.shadow-teach-active\b/g, "").trim();
+        var rows = document.querySelectorAll(rowSel);
+        var items = [];
+        for (var ri = 0; ri < rows.length && items.length < 50; ri++) {
+          var row = rows[ri];
+          var item = {};
+          for (var lf = 0; lf < block.fields.length; lf++) {
+            var lfld = block.fields[lf];
+            var lsel = lfld.selector.replace(/\.shadow-teach-hover\b/g, "").replace(/\.shadow-teach-active\b/g, "").trim();
+            var lel = row.querySelector(lsel);
+            item[lfld.key] = lel ? textOf(lel) : "";
+          }
+          if (Object.keys(item).some(function (k) { return item[k]; })) items.push(item);
+        }
+        out[block.key] = items;
+      }
+    }
+    return out;
+  }
+
   function sampleSingle(spec) {
     var el = document.querySelector(spec.selector);
     if (!el) return { error: "Element not found" };
@@ -189,8 +304,28 @@ export function teachInjectScript(pageUrl: string): string {
     hoverEl = null;
   }
 
+  function postRecorded(action, el, value) {
+    if (!el) return;
+    window.parent.postMessage({
+      type: "shadow:teach:recorded",
+      action: action,
+      selector: cssSelector(el),
+      value: value == null ? "" : String(value),
+      text: textOf(el).slice(0, 120)
+    }, parentOrigin);
+  }
+
+  document.addEventListener("change", function (event) {
+    if (pickMode !== "record") return;
+    var el = event.target;
+    if (!el || !el.matches) return;
+    if (!el.matches("input, textarea, select")) return;
+    if (el.type === "hidden" || el.type === "submit" || el.type === "button") return;
+    postRecorded("fill", el, el.value);
+  }, true);
+
   document.addEventListener("mouseover", function (event) {
-    if (pickMode === "off") return;
+    if (pickMode !== "pickField" && pickMode !== "pickRow") return;
     var t = event.target;
     if (!t || !t.closest) return;
     if (pickMode === "pickField" && rowSelectorForPick) {
@@ -205,11 +340,16 @@ export function teachInjectScript(pageUrl: string): string {
   }, true);
 
   document.addEventListener("mouseout", function () {
-    if (pickMode === "off") return;
+    if (pickMode !== "pickField" && pickMode !== "pickRow") return;
     clearHover();
   }, true);
 
   document.addEventListener("click", function (event) {
+    if (pickMode === "record") {
+      var rec = event.target && event.target.closest ? event.target.closest("button, a, input[type=submit], input[type=button], [role=button]") : null;
+      if (rec) postRecorded("click", rec, "");
+      return;
+    }
     if (pickMode === "off") return;
     var t = event.target;
     if (!t || !t.closest) return;
@@ -290,6 +430,9 @@ export function teachInjectScript(pageUrl: string): string {
             obj[pfld.key] = pel ? textOf(pel) : "";
           }
           window.parent.postMessage({ type: "shadow:teach:sampleObject", requestId: requestId, object: obj }, parentOrigin);
+        } else if (spec.kind === "composite") {
+          var compositeObj = sampleComposite(spec);
+          window.parent.postMessage({ type: "shadow:teach:sampleObject", requestId: requestId, object: compositeObj }, parentOrigin);
         }
       } catch (err) {
         window.parent.postMessage({ type: "shadow:teach:sampleResult", requestId: requestId, results: null, error: String(err) }, parentOrigin);

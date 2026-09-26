@@ -72,6 +72,17 @@ export async function dismissKeyAction() {
   redirect("/keys");
 }
 
+export async function revealKeyAction(keyId: string): Promise<string | null> {
+  "use server";
+  const current = await session();
+  if (!current) return null;
+  const handle = db();
+  const { revealCustomerKey } = await import("../src/accounts");
+  const secret = await revealCustomerKey(handle.db, current.tenantId, keyId);
+  await handle.close();
+  return secret;
+}
+
 export async function revokeKeyAction(formData: FormData) {
   "use server";
   const current = await session();
@@ -149,12 +160,60 @@ export async function publishEndpointAction(formData: FormData) {
     templatingSample: String(formData.get("templatingSample") ?? ""),
     inputSelector: String(formData.get("inputSelector") ?? ""),
     formFieldsJson: String(formData.get("formFieldsJson") ?? "[]"),
+    stagesJson: String(formData.get("stagesJson") ?? "[]"),
+    submitSelector: String(formData.get("submitSelector") ?? ""),
+    requiresSession: String(formData.get("requiresSession") ?? "") === "1",
+    fixedConnectorId: String(formData.get("connectorId") ?? "").trim() || undefined,
   });
   await handle.close();
   if (!result.ok) {
     redirect(`/endpoints/new/record?error=1&title=${encodeURIComponent(String(formData.get("title") ?? ""))}&description=${encodeURIComponent(String(formData.get("description") ?? ""))}&url=${encodeURIComponent(String(formData.get("url1") ?? ""))}`);
   }
   redirect(`/endpoints/test?connector=${encodeURIComponent(result.connectorId)}&published=1`);
+}
+
+export async function confirmEndpointTestAction(formData: FormData) {
+  "use server";
+  const current = await session();
+  if (!current) redirect("/login");
+  const connectorId = String(formData.get("connector_id") ?? "");
+  const passed = String(formData.get("passed") ?? "") === "yes";
+  const handle = db();
+  const { setEndpointTestResult } = await import("../src/accounts.js");
+  await setEndpointTestResult(handle.db, current.tenantId, connectorId, passed);
+  await handle.close();
+  if (!passed) redirect(`/endpoints/${encodeURIComponent(connectorId)}/edit`);
+  redirect("/endpoints?ready=1");
+}
+
+export async function renameEndpointAction(formData: FormData) {
+  "use server";
+  const current = await session();
+  if (!current) redirect("/login");
+  const handle = db();
+  const { setEndpointCopy } = await import("../src/accounts.js");
+  await setEndpointCopy(
+    handle.db,
+    current.tenantId,
+    String(formData.get("connector_id") ?? ""),
+    String(formData.get("title") ?? ""),
+    String(formData.get("description") ?? ""),
+  );
+  await handle.close();
+  redirect("/endpoints");
+}
+
+export async function setEndpointLimitAction(formData: FormData) {
+  "use server";
+  const current = await session();
+  if (!current) redirect("/login");
+  const connectorId = String(formData.get("connector_id") ?? "");
+  const maxResults = Number(formData.get("max_results") ?? "50");
+  const handle = db();
+  const { setEndpointMaxResults } = await import("../src/accounts.js");
+  await setEndpointMaxResults(handle.db, current.tenantId, connectorId, maxResults);
+  await handle.close();
+  redirect("/endpoints?limit=1");
 }
 
 export async function deleteEndpointAction(formData: FormData) {
@@ -208,10 +267,16 @@ export async function runJobAction(formData: FormData) {
   const current = await session();
   if (!current) redirect("/login");
   const handle = db();
-  const { dashboardSecret } = await import("../src/dashboard");
-  const secret = await dashboardSecret(handle.db, current.userId);
-  await handle.close();
+  const { customerKeyMatches } = await import("../src/accounts.js");
+  const secret = String(formData.get("api_key") ?? "").trim();
   const connectorId = String(formData.get("connector_id") ?? "");
+  const ownsKey = await customerKeyMatches(handle.db, current.tenantId, secret);
+  await handle.close();
+  if (!ownsKey) {
+    redirect(
+      `/endpoints/test?error=1&connector=${encodeURIComponent(connectorId)}&reason=${encodeURIComponent("Paste an API key from the API keys page. The portal test uses that key, not a hidden one.")}`,
+    );
+  }
   const inputs: Record<string, string | boolean> = {};
   for (const [key, value] of formData.entries()) {
     if (!key.startsWith("input_")) continue;
@@ -227,8 +292,13 @@ export async function runJobAction(formData: FormData) {
     headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const body = (await res.json()) as { job_id?: string };
-  if (!body.job_id) redirect(`/endpoints/test?error=1&connector=${encodeURIComponent(connectorId)}`);
+  const body = (await res.json().catch(() => ({}))) as { job_id?: string; failure?: { message?: string } };
+  if (!body.job_id) {
+    const reason = body.failure?.message ?? "";
+    redirect(
+      `/endpoints/test?error=1&connector=${encodeURIComponent(connectorId)}${reason ? `&reason=${encodeURIComponent(reason)}` : ""}`,
+    );
+  }
   redirect(`/jobs/${body.job_id}`);
 }
 

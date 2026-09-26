@@ -90,6 +90,9 @@ importers:
       '@shadowapi/graph-runner':
         specifier: workspace:*
         version: link:../../packages/graph-runner
+      '@shadowapi/teach-extract':
+        specifier: workspace:*
+        version: link:../../packages/teach-extract
       drizzle-orm:
         specifier: latest
         version: 0.45.3(better-sqlite3@13.0.3)(postgres@3.4.9)
@@ -136,6 +139,9 @@ importers:
       '@shadowapi/graph-runner':
         specifier: workspace:*
         version: link:../../packages/graph-runner
+      '@shadowapi/teach-extract':
+        specifier: workspace:*
+        version: link:../../packages/teach-extract
       bullmq:
         specifier: latest
         version: 6.3.8(ioredis@6.0.0)
@@ -207,6 +213,18 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^26.6.2
+        version: 26.6.2
+      tsx:
+        specifier: latest
+        version: 4.23.15
+      typescript:
+        specifier: latest
+        version: 7.0.2
+
+  packages/teach-extract:
+    devDependencies:
+      '@types/node':
+        specifier: latest
         version: 26.6.2
       tsx:
         specifier: latest

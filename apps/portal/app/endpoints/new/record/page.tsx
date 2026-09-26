@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Breadcrumb } from "../../../breadcrumb";
 import { publishEndpointAction, requireSession } from "../../../actions";
@@ -18,10 +17,6 @@ export default async function RecordEndpointPage({
   return (
     <main className="customer-page customer-page-teach">
       <Breadcrumb items={[{ href: "/endpoints", label: "My endpoints" }, { href: "/endpoints/new", label: "New endpoint" }, { label: title }]} />
-      <header className="page-head">
-        <h1>{title}</h1>
-        <p>{description}</p>
-      </header>
       <SiteBrowser
         action={publishEndpointAction}
         title={title}
@@ -29,9 +24,6 @@ export default async function RecordEndpointPage({
         url={url}
         showError={Boolean(query.error)}
       />
-      <p>
-        <Link href="/endpoints/new">Back</Link>
-      </p>
     </main>
   );
 }

@@ -28,7 +28,7 @@ export function compileStudioGraph(input: {
     success_enums: ["IN_TRANSIT"],
     steps: [
       { id: "open", type: "navigate", url: input.url1 },
-      { id: "fill", type: "fill", field: input.inputName },
+      { id: "fill", type: "fill", field: input.inputName, selector: `[data-shadow-input="${input.inputName}"]` },
       { id: "next", type: "navigate", url: input.url2 },
       { id: "after", type: "branch", patterns: [input.pattern], then: "extract" },
       { id: "extract", type: "extract" },

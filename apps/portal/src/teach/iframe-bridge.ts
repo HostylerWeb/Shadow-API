@@ -7,6 +7,7 @@ export type FrameBridgeHandlers = {
   onSampleResult: (requestId: string, results: Record<string, string>[] | null, error?: string) => void;
   onSampleSingle: (requestId: string, value: string | null, error?: string) => void;
   onRowCount?: (requestId: string, count: number, error?: string) => void;
+  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string }) => void;
 };
 
 export function attachFrameBridge(handlers: FrameBridgeHandlers): () => void {
@@ -31,6 +32,8 @@ export function attachFrameBridge(handlers: FrameBridgeHandlers): () => void {
       handlers.onSampleSingle(data.requestId, data.value, data.error);
     } else if (data.type === "shadow:teach:rowCount") {
       handlers.onRowCount?.(data.requestId, data.count, data.error);
+    } else if (data.type === "shadow:teach:recorded") {
+      handlers.onRecorded?.({ action: data.action, selector: data.selector, value: data.value, text: data.text });
     }
   }
 
@@ -49,7 +52,7 @@ export function syncPortalOrigin(frame: HTMLIFrameElement | null) {
 
 export function setTeachMode(
   frame: HTMLIFrameElement | null,
-  mode: "off" | "pickRow" | "pickField",
+  mode: "off" | "pickRow" | "pickField" | "record",
   rowSelector?: string,
 ) {
   postToFrame(frame, { type: "shadow:teach:mode", mode, rowSelector });

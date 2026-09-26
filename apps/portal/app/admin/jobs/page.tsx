@@ -4,6 +4,7 @@ import { createDb } from "@shadowapi/db";
 import { PAGE_SIZE, adminJobs, requireAdmin } from "../../../src/admin";
 import { requireSession } from "../../actions";
 import { Pager } from "../../pager";
+import { Status } from "../../status";
 
 export default async function AdminJobsPage({
   searchParams,
@@ -34,7 +35,7 @@ export default async function AdminJobsPage({
           <option value="">Any status</option>
           {["queued", "running", "succeeded", "failed", "cancelled", "blocked"].map((item) => (
             <option key={item} value={item}>
-              {item}
+              {item.charAt(0).toUpperCase() + item.slice(1)}
             </option>
           ))}
         </select>
@@ -56,7 +57,7 @@ export default async function AdminJobsPage({
               <td>
                 <Link href={`/admin/jobs/${job.id}`}>{job.connectorId}</Link>
               </td>
-              <td>{job.status}</td>
+              <td><Status value={job.status} /></td>
               <td>{job.tenantId.slice(0, 8)}</td>
               <td>{job.createdAt.toISOString().slice(0, 16).replace("T", " ")}</td>
             </tr>

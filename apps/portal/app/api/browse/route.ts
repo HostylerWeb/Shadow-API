@@ -1,16 +1,29 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  decodeHtmlEntitiesInUrl,
   normalizeTeachApiBrowseResponse,
   rewriteCss,
   rewriteHtml,
   rootFallbackAssetUrl,
   shouldPassThroughBrowseBody,
   spaStaticAssetFallbackUrls,
+  looksLikeFontBytes,
+  isFontAssetPath,
+  isTeachCmpTelemetryPath,
+  teachCmpTelemetryStub,
+  teachStubUnauthorizedBody,
+  upstreamBrowseRequestHeaders,
 } from "../../../src/browse/rewrite";
 import { resolveMirroredUpstream } from "../../../src/browse/browse-mirror";
+import {
+  browseCookieJarKey,
+  mergeBrowseSetCookies,
+  readBrowseCookieHeader,
+} from "../../../src/browse/browse-cookie-jar";
+import { browseErrorHtml } from "../../../src/browse/error-page";
 import { browseProxyClientScript } from "../../../src/browse/proxy-client-script";
-import { readSession } from "../../../src/session";
+import { readSession, type Session } from "../../../src/session";
 import { teachInjectScript } from "../../../src/teach/inject-script";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +38,14 @@ const DROP = [
 ];
 
 const BROWSE_POLICY = "unload=(self)";
+
+function teachUnauthorizedResponse(raw: string, baseHeaders: Headers): NextResponse | null {
+  const stub = teachStubUnauthorizedBody(raw);
+  if (!stub) return null;
+  const passHeaders = new Headers(baseHeaders);
+  passHeaders.set("content-type", stub.contentType);
+  return new NextResponse(stub.body, { status: 200, headers: passHeaders });
+}
 
 function allowedTarget(raw: string): URL | null {
   let url: URL;
@@ -54,7 +75,7 @@ function publicTarget(raw: string, portal: URL): URL | null {
     const nested = parsed.searchParams.get("u") ?? parsed.searchParams.get("url");
     const ownHost = parsed.hostname === portal.hostname || parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
     if (ownHost && nested) {
-      current = nested;
+      current = decodeHtmlEntitiesInUrl(nested);
       continue;
     }
     return allowedTarget(parsed.toString());
@@ -70,19 +91,21 @@ ${proxyClient}
 ${teachScript}`;
 }
 
-function upstreamRequestHeaders(request: NextRequest): HeadersInit {
-  return {
-    "user-agent":
-      request.headers.get("user-agent") ??
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    accept: request.headers.get("accept") ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  };
-}
+const DEFAULT_BROWSE_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
-async function fetchUpstream(target: URL, request: NextRequest) {
-  return fetch(target, {
+async function fetchUpstream(target: URL, request: NextRequest, portalSession: Session) {
+  const jarKey = browseCookieJarKey(portalSession.tenantId, target);
+  const headers = upstreamBrowseRequestHeaders({
+    incoming: request.headers,
+    target,
+    defaultUserAgent: DEFAULT_BROWSE_UA,
+    defaultAccept: request.headers.get("accept") ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    upstreamCookie: readBrowseCookieHeader(jarKey),
+  });
+  const response = await fetch(target, {
     method: request.method === "POST" ? "POST" : "GET",
-    headers: upstreamRequestHeaders(request),
+    headers,
     body: request.method === "POST" ? await request.arrayBuffer() : undefined,
     redirect: "follow",
   }).catch((err: unknown) => {
@@ -92,20 +115,35 @@ async function fetchUpstream(target: URL, request: NextRequest) {
     console.error(`[browse] upstream fetch failed host=${target.hostname} ${code || detail}`);
     return null;
   });
+  if (response) mergeBrowseSetCookies(jarKey, response);
+  return response;
 }
 
 async function handle(request: NextRequest) {
   const token = (await cookies()).get("portal_session")?.value;
-  if (!readSession(token)) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  const portalSession = readSession(token);
+  if (!portalSession) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const target =
     resolveMirroredUpstream(request) ??
-    publicTarget(request.nextUrl.searchParams.get("u") ?? "", request.nextUrl);
+    publicTarget(decodeHtmlEntitiesInUrl(request.nextUrl.searchParams.get("u") ?? ""), request.nextUrl);
   if (!target) {
     const html = `<!doctype html><html><body style="font-family:sans-serif;padding:1.5rem"><p>This link stayed inside ShadowAPI instead of opening the website.</p><p>Use the address bar in the box, or go back and enter the website address again.</p></body></html>`;
     return new NextResponse(html, { status: 400, headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
-  const upstream = await fetchUpstream(target, request);
+  if (isTeachCmpTelemetryPath(target)) {
+    const stub = teachCmpTelemetryStub(target);
+    return new NextResponse(stub.body, {
+      status: stub.status,
+      headers: {
+        "content-type": stub.contentType,
+        "cache-control": "no-store",
+        "Permissions-Policy": BROWSE_POLICY,
+      },
+    });
+  }
+
+  const upstream = await fetchUpstream(target, request, portalSession);
 
   if (!upstream) {
     return new NextResponse(
@@ -131,7 +169,7 @@ async function handle(request: NextRequest) {
   const fallbacks = spaStaticAssetFallbackUrls(target);
   if (fallbacks.length > 0 && type.includes("text/html")) {
     for (const candidate of fallbacks) {
-      const retry = await fetchUpstream(candidate, request);
+      const retry = await fetchUpstream(candidate, request, portalSession);
       const retryType = retry?.headers.get("content-type") ?? "";
       if (retry && !retryType.includes("text/html")) {
         effectiveUpstream = retry;
@@ -166,6 +204,8 @@ async function handle(request: NextRequest) {
       );
     }
     if (shouldPassThroughBrowseBody(resolved, effectiveType, rawHtml)) {
+      const unauthorized = teachUnauthorizedResponse(rawHtml, headers);
+      if (unauthorized) return unauthorized;
       const normalized = normalizeTeachApiBrowseResponse(resolved, effectiveUpstream.status, rawHtml);
       const passHeaders = new Headers(headers);
       const trimmed = normalized.body.trimStart();
@@ -190,11 +230,40 @@ async function handle(request: NextRequest) {
     const body = effectiveType.includes("text/css") ? rewriteCss(text, resolved, portalOrigin) : text;
     return new NextResponse(body, { status: effectiveUpstream.status, headers });
   }
-  if (effectiveType.includes("font/") || effectiveType.includes("image/")) {
-    return new NextResponse(await effectiveUpstream.arrayBuffer(), { status: effectiveUpstream.status, headers });
+  if (effectiveType.includes("font/") || effectiveType.includes("image/") || isFontAssetPath(target.pathname)) {
+    let buf = await effectiveUpstream.arrayBuffer();
+    if (isFontAssetPath(target.pathname) && !looksLikeFontBytes(buf) && fallbacks.length > 0) {
+      for (const candidate of fallbacks) {
+        const retry = await fetchUpstream(candidate, request, portalSession);
+        if (!retry) continue;
+        const retryBuf = await retry.arrayBuffer();
+        if (looksLikeFontBytes(retryBuf)) {
+          const retryType = retry.headers.get("content-type");
+          if (retryType) headers.set("content-type", retryType);
+          return new NextResponse(retryBuf, { status: retry.status, headers });
+        }
+      }
+    }
+    return new NextResponse(buf, { status: effectiveUpstream.status, headers });
   }
   const raw = await effectiveUpstream.text();
+  const unauthorized = teachUnauthorizedResponse(raw, headers);
+  if (unauthorized) return unauthorized;
+  if (!effectiveUpstream.ok && raw.length < 512 && !effectiveType.includes("json")) {
+    return new NextResponse(
+      browseErrorHtml(
+        "Site returned an error",
+        `${target.hostname} responded with HTTP ${effectiveUpstream.status}. Some sites block proxy or teach previews from this server.`,
+      ),
+      {
+        status: effectiveUpstream.status >= 400 ? effectiveUpstream.status : 502,
+        headers: { "content-type": "text/html; charset=utf-8", "Permissions-Policy": BROWSE_POLICY },
+      },
+    );
+  }
   if (shouldPassThroughBrowseBody(resolved, effectiveType, raw)) {
+    const unauthorizedPass = teachUnauthorizedResponse(raw, headers);
+    if (unauthorizedPass) return unauthorizedPass;
     const normalized = normalizeTeachApiBrowseResponse(resolved, effectiveUpstream.status, raw);
     const passHeaders = new Headers(headers);
     if (normalized.contentType) passHeaders.set("content-type", normalized.contentType);

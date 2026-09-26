@@ -4,7 +4,7 @@ import { createDb } from "@shadowapi/db";
 import { listUserEndpoints } from "../../../src/accounts";
 import { tenantJob } from "../../../src/dashboard";
 import { Breadcrumb } from "../../breadcrumb";
-import { cancelJobAction, requireSession } from "../../actions";
+import { cancelJobAction, confirmEndpointTestAction, requireSession } from "../../actions";
 import { isTerminalStatus } from "../job-status-copy";
 import { JobPoll } from "../poll";
 import { JobDebugPanel } from "../job-debug-panel";
@@ -24,7 +24,9 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const handle = createDb(process.env.DATABASE_URL!);
   const job = await tenantJob(handle.db, session.tenantId, id);
-  const titles = new Map((await listUserEndpoints(handle.db, session.tenantId)).map((row) => [row.connectorId, row.title]));
+  const endpoints = await listUserEndpoints(handle.db, session.tenantId);
+  const titles = new Map(endpoints.map((row) => [row.connectorId, row.title]));
+  const endpoint = endpoints.find((row) => row.connectorId === job.connectorId);
   await handle.close();
   if (!job) notFound();
   const outputs = job.outputs as Record<string, unknown> | null;
@@ -70,6 +72,34 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
       ) : null}
 
       {debug ? <JobDebugPanel debug={debug} /> : null}
+
+      {isTerminalStatus(job.status) && endpoint && !endpoint.testPassed ? (
+        <section className="card">
+          <h2>Did this test look right?</h2>
+          <p className="muted">This run used your API key. Say whether the response is what callers should get.</p>
+          {job.status === "succeeded" ? (
+            <form action={confirmEndpointTestAction} className="inline">
+              <input type="hidden" name="connector_id" value={job.connectorId} />
+              <button type="submit" name="passed" value="yes" className="btn-primary">Yes, enable this endpoint</button>
+              <button type="submit" name="passed" value="no" className="btn-ghost">No, edit the endpoint</button>
+            </form>
+          ) : (
+            <form action={confirmEndpointTestAction}>
+              <input type="hidden" name="connector_id" value={job.connectorId} />
+              <button type="submit" name="passed" value="no" className="btn-primary">Edit the endpoint</button>
+            </form>
+          )}
+        </section>
+      ) : null}
+
+      <section className="card">
+        <h2>The call</h2>
+        <p className="muted">Same request your server sends. Use the API key you pasted on the test page.</p>
+        <pre className="api-preview">{`curl -s -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify({ connector_id: job.connectorId, inputs: job.inputs ?? {} })}' \\
+  ${process.env.GATEWAY_URL ?? "http://localhost:3000"}/v1/jobs`}</pre>
+      </section>
 
       {hasResponseBody ? (
         <section className="card job-response-card">

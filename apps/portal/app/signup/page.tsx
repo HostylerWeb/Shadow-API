@@ -6,8 +6,8 @@ export default async function SignupPage({ searchParams }: { searchParams: Promi
     <div className="login-screen">
     <form className="login-card" action={signupAction}>
       <p className="brand">ShadowAPI</p>
-      <h1>Create a tenant</h1>
-      <p className="muted">This signs you into the portal. Create API endpoints from the dashboard, or call the built-in ones from your server.</p>
+      <h1>Create an account</h1>
+      <p className="muted">You will land in the portal and can teach your first endpoint from there.</p>
       {params.error === "1" ? <p className="banner">That email is already registered.</p> : null}
       {params.error === "2" ? <p className="banner">The account could not be created. Try again.</p> : null}
       <label>

@@ -40,9 +40,14 @@ export type MarkedListExtract = {
 export type MarkedSingleExtract = {
   kind: "marked_single";
   selector: string;
+  output_key?: string;
 };
 
-export type MarkedExtract = MarkedListExtract | MarkedSingleExtract | MarkedPageExtract;
+import type { CompositeExtract } from "@shadowapi/teach-extract";
+
+export type { CompositeExtract };
+
+export type MarkedExtract = MarkedListExtract | MarkedSingleExtract | MarkedPageExtract | CompositeExtract;
 
 export type ShadowNavigateMessage = { type: "shadow:navigate"; url: string };
 
@@ -88,11 +93,20 @@ export type ShadowFromFrame =
   | ShadowSampleResultMessage
   | ShadowSampleSingleMessage
   | ShadowRowCountMessage
-  | ShadowSampleObjectMessage;
+  | ShadowSampleObjectMessage
+  | ShadowRecordedMessage;
+
+export type ShadowRecordedMessage = {
+  type: "shadow:teach:recorded";
+  action: "fill" | "click";
+  selector: string;
+  value: string;
+  text: string;
+};
 
 export type ShadowTeachModeCommand = {
   type: "shadow:teach:mode";
-  mode: "off" | "pickRow" | "pickField";
+  mode: "off" | "pickRow" | "pickField" | "record";
   rowSelector?: string;
 };
 
@@ -132,7 +146,8 @@ export function isShadowFromFrame(data: unknown): data is ShadowFromFrame {
     type === "shadow:teach:sampleResult" ||
     type === "shadow:teach:sampleSingle" ||
     type === "shadow:teach:rowCount" ||
-    type === "shadow:teach:sampleObject"
+    type === "shadow:teach:sampleObject" ||
+    type === "shadow:teach:recorded"
   );
 }
 
@@ -152,5 +167,5 @@ export function pageKeysMatch(a: string, b: string): boolean {
 }
 
 export function defaultFieldKeys(): string[] {
-  return ["name", "number", "address"];
+  return ["field_1", "field_2", "field_3"];
 }

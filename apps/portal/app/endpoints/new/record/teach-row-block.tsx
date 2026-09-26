@@ -26,10 +26,9 @@ export function TeachRowBlock({
       <div className="teach-step-panel-head">
         <span className="teach-step-panel-num">A</span>
         <div>
-          <h3 id="teach-row-title">Pick one search result row</h3>
+          <h3 id="teach-row-title">Pick one repeating item</h3>
           <p className="teach-step-panel-lead">
-            Click a <strong>single company</strong> (or one item) in the list — not the whole table. Every row like it becomes one entry in{" "}
-            <code>results[]</code>.
+            Click a <strong>single item</strong> in the repeating block — not the whole list wrapper. Every matching sibling becomes one array entry.
           </p>
         </div>
       </div>

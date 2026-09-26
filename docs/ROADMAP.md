@@ -341,7 +341,7 @@ Plan changes go through the local billing route `POST /v1/billing/plan`. There i
 
 - [x] Define inputs and outputs; publish manifest version
 - [x] Compile graph JSON with pinned `graph_version`
-- [x] Staging replay must pass before production promote
+- [x] Staging replay must pass before production promote (marked teaches use composite readiness + teach graph; legacy studio replay unchanged)
 
 ### 13.6 Human access and safety
 

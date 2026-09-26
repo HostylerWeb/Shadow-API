@@ -1,7 +1,16 @@
 import type { CarrierRun } from "@shadowapi/graph-runner";
+import type { GraphDocument, NavigationPattern } from "@shadowapi/graph-runner";
+import {
+  evaluateExtractComposite,
+  extractHasNonEmptyOutput,
+  normalizeToComposite,
+  parseExtractSpec,
+  type ExtractSpec,
+} from "@shadowapi/teach-extract";
 import type { BrowserContextOptions, Page } from "playwright-core";
 import { withJobContext } from "./browser.js";
 import { extractResultRowsFromPage, mapResultRow, type ResultFieldSpec } from "./result-rows.js";
+import { runTeachGraph } from "./teach-runtime.js";
 
 export type MarkedField = { key: string; selector: string };
 
@@ -16,23 +25,29 @@ export type CustomExtract = {
     | "result_rows"
     | "marked_list"
     | "marked_single"
-    | "marked_page";
+    | "marked_page"
+    | "composite";
   match?: string;
   row_selector?: string;
   fields?: MarkedField[];
   selector?: string;
+  blocks?: Array<Record<string, unknown>>;
 };
 
 export type CustomManifest = {
   start_url?: string;
   result_url?: string;
   kind?: "read" | "lookup";
-  pattern?: "P1" | "P2" | "P3";
+  pattern?: NavigationPattern;
   output_name?: string;
   sample_output?: string;
   extract?: CustomExtract;
   result_fields?: ResultFieldSpec[];
   graph_version?: string;
+  graph?: GraphDocument;
+  form_fields?: Array<{ key: string; selector: string }>;
+  submit_selector?: string;
+  requires_session?: boolean;
 };
 
 const GRAPH_VERSION = "v1.0.0-g1";
@@ -115,13 +130,46 @@ export async function extractMarkedList(
 
   const { rowCount, results } = await page.evaluate(
     ({ rowSel, fields }) => {
+      function readPicked(el: Element): string {
+        const ownText = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+        const img = el.tagName === "IMG" ? (el as HTMLImageElement) : !ownText ? el.querySelector("img") : null;
+        if (img) {
+          const raw = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+          if (raw) {
+            try {
+              return new URL(raw, document.baseURI).href;
+            } catch {
+              return raw;
+            }
+          }
+        }
+        const anchor = el.closest("a[href]");
+        const href = anchor?.getAttribute("href") || "";
+        if (anchor && href && !href.startsWith("#") && !href.toLowerCase().startsWith("javascript:")) {
+          const leaves = Array.from(anchor.querySelectorAll("*")).filter(
+            (node) => node.children.length === 0 && (node.textContent ?? "").replace(/\s+/g, " ").trim().length > 0,
+          );
+          const abs = () => {
+            try {
+              return new URL(href, document.baseURI).href;
+            } catch {
+              return href;
+            }
+          };
+          const role = el.getAttribute("role");
+          if (el.tagName === "BUTTON" || role === "button" || role === "link") return abs();
+          if (el === anchor && leaves.length > 1) return abs();
+          if (el.children.length === 0 && leaves.length > 1 && leaves[leaves.length - 1] === el) return abs();
+        }
+        return ownText;
+      }
       const rows = Array.from(document.querySelectorAll(rowSel)).slice(0, 50);
       const out: Record<string, string>[] = [];
       for (const row of rows) {
         const item: Record<string, string> = {};
         for (const field of fields) {
           const el = row.querySelector(field.selector);
-          item[field.key] = el ? (el.textContent ?? "").replace(/\s+/g, " ").trim() : "";
+          item[field.key] = el ? readPicked(el) : "";
         }
         if (Object.values(item).some((value) => value.length > 0)) out.push(item);
       }
@@ -140,7 +188,20 @@ export async function extractMarkedSingle(page: Page, selector: string, trace?: 
   if (selector !== sel) trace?.push(`sanitize single selector: ${JSON.stringify(selector)} → ${JSON.stringify(sel)}`);
   const value = await page.evaluate((s) => {
     const el = document.querySelector(s);
-    return el ? (el.textContent ?? "").replace(/\s+/g, " ").trim() : "";
+    if (!el) return "";
+    const ownText = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    const img = el.tagName === "IMG" ? (el as HTMLImageElement) : !ownText ? el.querySelector("img") : null;
+    if (img) {
+      const raw = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+      if (raw) {
+        try {
+          return new URL(raw, document.baseURI).href;
+        } catch {
+          return raw;
+        }
+      }
+    }
+    return ownText;
   }, sel);
   trace?.push(`extract marked_single: len=${value.length}`);
   return value;
@@ -190,12 +251,42 @@ export async function extractMarkedPage(
     const result: Record<string, string> = {};
     for (const field of fieldSpecs) {
       const el = document.querySelector(field.selector);
-      result[field.key] = el ? (el.textContent ?? "").replace(/\s+/g, " ").trim() : "";
+      if (!el) {
+        result[field.key] = "";
+        continue;
+      }
+      const ownText = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      const img = el.tagName === "IMG" ? (el as HTMLImageElement) : !ownText ? el.querySelector("img") : null;
+      if (img) {
+        const raw = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+        if (raw) {
+          try {
+            result[field.key] = new URL(raw, document.baseURI).href;
+            continue;
+          } catch {
+            result[field.key] = raw;
+            continue;
+          }
+        }
+      }
+      result[field.key] = ownText;
     }
     return result;
   }, sanitized);
   trace?.push(`extract marked_page: ${Object.values(out).filter((v) => v.length).length}/${fields.length} non-empty`);
   return out;
+}
+
+function teachExtractSpec(extract: CustomExtract): ExtractSpec | null {
+  return parseExtractSpec(JSON.stringify(extract));
+}
+
+function resolveGraphUrl(template: string, inputs: Record<string, string>): string {
+  let url = template;
+  for (const [key, value] of Object.entries(inputs)) {
+    url = url.split(`{${key}}`).join(encodeURIComponent(value));
+  }
+  return url;
 }
 
 export async function runLiveCustom(options: {
@@ -231,9 +322,66 @@ export async function runLiveCustom(options: {
     return await withJobContext({ storageState: options.storageState }, async (context) => {
       const page = await context.newPage();
       page.setDefaultTimeout(timeoutMs);
-      trace.push(`navigation: goto domcontentloaded (timeout ${timeoutMs}ms)`);
-      await page.goto(target, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-      trace.push(`navigation: landed url=${page.url()}`);
+      const teachSpec = teachExtractSpec(extract);
+      const graph = manifest.graph;
+
+      if (graph?.steps?.length && teachSpec) {
+        trace.push(`workflow: ${graph.steps.length} steps`);
+        const nav = await runTeachGraph({
+          page,
+          graph,
+          inputs,
+          pattern: manifest.pattern ?? "P2",
+          resolveUrl: (template) => resolveGraphUrl(template, inputs),
+          trace,
+          timeoutMs,
+        });
+        if (!nav.ok) {
+          return {
+            jobStatus: "failed",
+            failureCode: "GRAPH_STEP_FAILED",
+            failureDetail: nav.message,
+            outputs: debugPayload(trace, { target, error: nav.message }),
+            graphVersion: manifest.graph_version ?? GRAPH_VERSION,
+          };
+        }
+        trace.push(`workflow: extract at url=${nav.finalUrl}`);
+      } else {
+        trace.push(`navigation: goto domcontentloaded (timeout ${timeoutMs}ms)`);
+        await page.goto(target, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+        trace.push(`navigation: landed url=${page.url()}`);
+      }
+
+      if (teachSpec) {
+        const composite = normalizeToComposite(teachSpec);
+        const maxRows = Math.min(500, Math.max(1, Number(manifest.max_results) || 50));
+        const data = await evaluateExtractComposite(page, composite, maxRows);
+        trace.push(`extract composite: keys=${Object.keys(data).join(",")}`);
+        if (!extractHasNonEmptyOutput(data)) {
+          return {
+            jobStatus: "failed",
+            failureCode: "GRAPH_STEP_FAILED",
+            failureDetail: "Taught selectors did not return data on the live page.",
+            outputs: debugPayload(trace, { target, finalUrl: page.url() }),
+            graphVersion: manifest.graph_version ?? GRAPH_VERSION,
+          };
+        }
+        const listKey = Object.keys(data).find((k) => Array.isArray(data[k]));
+        const listVal = listKey ? (data[listKey] as Record<string, string>[]) : undefined;
+        return {
+          jobStatus: "succeeded",
+          outputs: {
+            ...data,
+            ...debugPayload(trace, {
+              target,
+              finalUrl: page.url(),
+              rowCount: listVal?.length,
+              sampleRow: listVal?.[0],
+            }),
+          },
+          graphVersion: manifest.graph_version ?? GRAPH_VERSION,
+        };
+      }
 
       const kind = String(extract.kind ?? "");
 
@@ -324,9 +472,9 @@ export async function runLiveCustom(options: {
           manifest.result_fields && manifest.result_fields.length > 0
             ? manifest.result_fields
             : [
-                { key: "name", source: "heading" as const },
-                { key: "number", source: "reference" as const },
-                { key: "address", source: "detail" as const },
+                { key: "field_1", source: "heading" as const },
+                { key: "field_2", source: "reference" as const },
+                { key: "field_3", source: "detail" as const },
               ];
         const mapped = results.map((row) => mapResultRow(row, fields));
         return {

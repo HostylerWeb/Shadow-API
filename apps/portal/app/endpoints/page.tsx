@@ -5,9 +5,10 @@ import { liveRunsThisMonth } from "../../src/dashboard";
 import { liveCap } from "@shadowapi/core";
 import { tenants } from "@shadowapi/db/schema";
 import { eq } from "drizzle-orm";
-import { deleteEndpointAction, requireSession } from "../actions";
+import { deleteEndpointAction, renameEndpointAction, requireSession, setEndpointLimitAction } from "../actions";
+import { EndpointCopy } from "./endpoint-copy";
 
-export default async function EndpointsPage({ searchParams }: { searchParams: Promise<{ published?: string }> }) {
+export default async function EndpointsPage({ searchParams }: { searchParams: Promise<{ published?: string; ready?: string; limit?: string }> }) {
   const session = await requireSession();
   const query = await searchParams;
   const handle = createDb(process.env.DATABASE_URL!);
@@ -27,7 +28,9 @@ export default async function EndpointsPage({ searchParams }: { searchParams: Pr
           + New endpoint
         </Link>
       </div>
-      {query.published ? <p className="banner">Published. Test it below or call it with an API key.</p> : null}
+      {query.published ? <p className="banner">Published. Run the test, then say whether the result looks right. The endpoint stays off until you confirm it.</p> : null}
+      {query.ready ? <p className="banner">Test confirmed. This endpoint can be called with an API key.</p> : null}
+      {query.limit ? <p className="banner">Result limit saved. The next run uses that maximum.</p> : null}
       <p className="usage-line">
         Live calls this month: {month} / {cap}
       </p>
@@ -44,19 +47,31 @@ export default async function EndpointsPage({ searchParams }: { searchParams: Pr
           {mine.map((row) => (
             <li key={row.connectorId} className="card endpoint-card">
               <div>
-                <h2>{row.title}</h2>
-                <p>{row.description}</p>
-                {row.startUrl ? <p className="muted">{row.startUrl}</p> : null}
+                <div className="endpoint-heading">
+                  <EndpointCopy connectorId={row.connectorId} title={row.title} description={row.description} action={renameEndpointAction} />
+                  <span className={row.testPassed ? "status status-succeeded" : "status status-blocked"}>
+                    {row.testPassed ? "Ready" : "Needs test"}
+                  </span>
+                </div>
+                {row.startUrl ? <p className="muted endpoint-url">{row.startUrl}</p> : null}
                 <p className="api-id">
                   API id: <code>{row.connectorId}</code>
                 </p>
+                <form action={setEndpointLimitAction} className="endpoint-limit">
+                  <input type="hidden" name="connector_id" value={row.connectorId} />
+                  <label>
+                    Max results
+                    <input name="max_results" type="number" min={1} max={500} defaultValue={row.maxResults} />
+                  </label>
+                  <button type="submit" className="btn-ghost">Save</button>
+                </form>
               </div>
               <div className="endpoint-actions">
-                <Link href={`/endpoints/test?connector=${encodeURIComponent(row.connectorId)}`}>Test</Link>
-                <Link href={`/endpoints/${encodeURIComponent(row.connectorId)}/edit`}>Edit</Link>
+                <Link className="btn-primary" href={`/endpoints/test?connector=${encodeURIComponent(row.connectorId)}`}>Test</Link>
+                <Link className="btn-ghost" href={`/endpoints/${encodeURIComponent(row.connectorId)}/edit`}>Edit fields</Link>
                 <form action={deleteEndpointAction}>
                   <input type="hidden" name="connector_id" value={row.connectorId} />
-                  <button type="submit" className="btn-ghost">
+                  <button type="submit" className="btn-danger">
                     Delete
                   </button>
                 </form>

@@ -40,6 +40,7 @@ export function TeachNextStep({ headline, detail }: NextStepProps) {
 }
 
 export function computeTeachGuide(input: {
+  readOnlyWorkflow?: boolean;
   intentPending: boolean;
   onActionPage: boolean;
   onResultPage: boolean;
@@ -53,8 +54,9 @@ export function computeTeachGuide(input: {
   picking: boolean;
   pendingPick: boolean;
 }): { steps: TeachGuideStep[]; headline: string; detail: string } {
+  const readOnly = Boolean(input.readOnlyWorkflow);
   const labeledStart = !input.intentPending || input.onActionPage || input.onResultPage;
-  const formDone = input.formFieldCount > 0 || input.hasResultPage;
+  const formDone = readOnly || input.formFieldCount > 0 || input.hasResultPage;
   const onResults = input.onResultPage;
   const rowDone = input.resultShape !== "list" || input.hasRow;
   const fieldsDone = input.outputFieldCount > 0;
@@ -70,8 +72,11 @@ export function computeTeachGuide(input: {
     {
       id: "form",
       label: "Map form inputs",
-      done: formDone && !input.onActionPage,
-      active: (input.onActionPage || (Boolean(input.actionUrlSet) && !input.hasResultPage)) && !input.intentPending,
+      done: formDone && (readOnly || !input.onActionPage),
+      active:
+        !readOnly &&
+        (input.onActionPage || (Boolean(input.actionUrlSet) && !input.hasResultPage)) &&
+        !input.intentPending,
     },
     {
       id: "build",
@@ -108,7 +113,16 @@ export function computeTeachGuide(input: {
       detail: "Pick one option in the panel: where you start, where you search, or where the answers appear.",
     };
   }
-  if (input.onActionPage || (input.actionUrlSet && !input.hasResultPage && !input.onResultPage)) {
+  if (readOnly && input.onResultPage) {
+    if (input.resultShape === "list" && !input.hasRow) {
+      return {
+        steps,
+        headline: "Step 2 — pick one repeating row",
+        detail: "Press “Set result row”, then click one item in the repeating list (not the whole container).",
+      };
+    }
+  }
+  if (input.onActionPage || (!readOnly && input.actionUrlSet && !input.hasResultPage && !input.onResultPage)) {
     if (!input.onActionPage && input.actionUrlSet) {
       return {
         steps,
@@ -140,15 +154,15 @@ export function computeTeachGuide(input: {
     if (input.resultShape === "list" && !input.hasRow) {
       return {
         steps,
-        headline: "Step 3 — pick one result row",
-        detail: "Press “Set result row”, then click a single search result (one company, one product — not the whole list container).",
+        headline: "Step 3 — pick one repeating row",
+        detail: "Press “Set result row”, then click one item in the repeating list (not the whole container).",
       };
     }
     if (input.outputFieldCount === 0) {
       return {
         steps,
         headline: "Add each piece of data you want in the API",
-        detail: "Press “Add output field”, then click name, number, address (or whatever you need) inside one row. Repeat for each column.",
+        detail: "Press “Add output field”, then click each value you want in the API. Repeat for every column or field.",
       };
     }
     if (!input.canPublish) {

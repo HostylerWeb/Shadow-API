@@ -2,11 +2,19 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, count, eq, isNull, sql } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@shadowapi/db";
 import { decryptVault, encryptVault } from "@shadowapi/core";
-import { compileStudioGraph, loadCarrierFixture, loadGraph, replayStudioGraph, runCarrierFixture, runWarehouseFixture, loadWarehouseFixture, STUDIO_CONNECTOR_ID, STUDIO_GRAPH_VERSION } from "@shadowapi/graph-runner";
+import { compileStudioGraph, compileTeachGraph, loadCarrierFixture, loadGraph, replayStudioGraph, runCarrierFixture, runWarehouseFixture, loadWarehouseFixture, STUDIO_CONNECTOR_ID, STUDIO_GRAPH_VERSION, waitSelectorFromExtract } from "@shadowapi/graph-runner";
 import type { NavigationPattern } from "@shadowapi/graph-runner";
+import {
+  compositeReady,
+  normalizeToComposite,
+  outputSchemaFromSpec,
+  parseExtractSpec,
+  primaryOutputName,
+  type ExtractSpec,
+} from "@shadowapi/teach-extract";
 import type { MarkedExtract } from "./teach/protocol";
 import { apiKeys, auditLog, connectorVersions, graphRepairs, portalUsers, tenants, usageEvents, vaultSessions } from "@shadowapi/db/schema";
 
@@ -121,13 +129,43 @@ export async function createApiKey(db: Db, tenantId: string, name: string): Prom
     name,
     keyPrefix: secret.slice(0, 12),
     keyHash: hashKey(secret),
+    secretCipher: encryptVault(secret),
     scopes: ["jobs:write", "jobs:read"],
   });
   return secret;
 }
 
+export async function revealCustomerKey(db: Db, tenantId: string, keyId: string): Promise<string | null> {
+  const rows = await db
+    .select({ secretCipher: apiKeys.secretCipher })
+    .from(apiKeys)
+    .where(and(eq(apiKeys.id, keyId), eq(apiKeys.tenantId, tenantId), isNull(apiKeys.revokedAt), sql`${apiKeys.name} <> 'dashboard'`))
+    .limit(1);
+  const cipher = rows[0]?.secretCipher;
+  if (!cipher) return null;
+  return decryptVault(cipher);
+}
+
 export async function revokeApiKey(db: Db, tenantId: string, keyId: string): Promise<void> {
   await db.delete(apiKeys).where(and(eq(apiKeys.id, keyId), eq(apiKeys.tenantId, tenantId), sql`${apiKeys.name} <> 'dashboard'`));
+}
+
+export async function customerKeyMatches(db: Db, tenantId: string, secret: string): Promise<boolean> {
+  const token = secret.trim();
+  if (!token) return false;
+  const rows = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.tenantId, tenantId),
+        eq(apiKeys.keyHash, hashKey(token)),
+        isNull(apiKeys.revokedAt),
+        sql`${apiKeys.name} <> 'dashboard'`,
+      ),
+    )
+    .limit(1);
+  return Boolean(rows[0]);
 }
 
 export async function listApiKeys(db: Db, tenantId: string) {
@@ -137,6 +175,7 @@ export async function listApiKeys(db: Db, tenantId: string) {
       name: apiKeys.name,
       keyPrefix: apiKeys.keyPrefix,
       revokedAt: apiKeys.revokedAt,
+      hasSecret: isNotNull(apiKeys.secretCipher),
     })
     .from(apiKeys)
     .where(and(eq(apiKeys.tenantId, tenantId), sql`${apiKeys.name} <> 'dashboard'`));
@@ -228,7 +267,7 @@ export async function activeKeyCount(db: Db, tenantId: string): Promise<number> 
   return Number(rows[0]?.n ?? 0);
 }
 
-export const MAX_CUSTOM_ENDPOINTS = 5;
+export const MAX_CUSTOM_ENDPOINTS = 12;
 
 function slugConnectorId(title: string): string {
   const slug = title
@@ -258,8 +297,50 @@ export async function listUserEndpoints(db: Db, tenantId: string) {
         pattern: ((row.manifest as { pattern?: string }).pattern ?? "P2") as "P1" | "P2" | "P3",
         inputName: Object.keys((row.manifest as { inputs?: Record<string, unknown> }).inputs ?? {})[0] ?? "",
         outputName: (row.manifest as { output_name?: string }).output_name ?? "result",
+        testPassed: (row.manifest as { test_passed?: boolean }).test_passed === true,
+        maxResults: Math.min(500, Math.max(1, Number((row.manifest as { max_results?: number }).max_results) || 50)),
       };
     });
+}
+
+async function patchEndpointManifest(
+  db: Db,
+  tenantId: string,
+  connectorId: string,
+  patch: Record<string, unknown>,
+): Promise<boolean> {
+  const row = (
+    await db.select().from(connectorVersions).where(eq(connectorVersions.connectorId, connectorId)).limit(1)
+  )[0];
+  if (!row) return false;
+  const manifest = row.manifest as { tenant_id?: string };
+  if (manifest.tenant_id !== tenantId) return false;
+  await db
+    .update(connectorVersions)
+    .set({ manifest: { ...row.manifest, ...patch } })
+    .where(eq(connectorVersions.id, row.id));
+  return true;
+}
+
+export async function setEndpointTestResult(db: Db, tenantId: string, connectorId: string, passed: boolean): Promise<boolean> {
+  return patchEndpointManifest(db, tenantId, connectorId, { test_passed: passed });
+}
+
+export async function setEndpointCopy(
+  db: Db,
+  tenantId: string,
+  connectorId: string,
+  title: string,
+  description: string,
+): Promise<boolean> {
+  const nextTitle = title.trim();
+  if (!nextTitle) return false;
+  return patchEndpointManifest(db, tenantId, connectorId, { title: nextTitle, description: description.trim() });
+}
+
+export async function setEndpointMaxResults(db: Db, tenantId: string, connectorId: string, maxResults: number): Promise<boolean> {
+  const limit = Math.min(500, Math.max(1, Math.floor(maxResults) || 50));
+  return patchEndpointManifest(db, tenantId, connectorId, { max_results: limit });
 }
 
 export async function userEndpointCount(db: Db, tenantId: string): Promise<number> {
@@ -288,20 +369,38 @@ function manifestExtract(
   extractId: string,
   sample: string,
   extractMode?: string,
+  listOutputName?: string,
 ): Record<string, unknown> {
   const marked = parseMarkedExtract(extractJson ?? "");
+  if (marked?.kind === "composite") {
+    return marked as unknown as Record<string, unknown>;
+  }
   if (marked?.kind === "marked_list") {
+    const arrayKey = listOutputName?.trim() || "items";
     return {
-      kind: "marked_list",
-      row_selector: marked.row_selector,
-      fields: marked.fields,
+      kind: "composite",
+      blocks: [
+        {
+          type: "list",
+          key: arrayKey,
+          row_selector: marked.row_selector,
+          fields: marked.fields,
+        },
+      ],
     };
   }
   if (marked?.kind === "marked_single") {
-    return { kind: "marked_single", selector: marked.selector };
+    const key = listOutputName?.trim() || marked.output_key?.trim() || "value";
+    return {
+      kind: "composite",
+      blocks: [{ type: "scalar", key, selector: marked.selector }],
+    };
   }
   if (marked?.kind === "marked_page") {
-    return { kind: "marked_page", fields: marked.fields };
+    return {
+      kind: "composite",
+      blocks: [{ type: "fields", fields: marked.fields }],
+    };
   }
   if (extractMode === "result_list" || extractId === "result_rows") {
     return { kind: "result_rows" };
@@ -309,28 +408,37 @@ function manifestExtract(
   return extractFromCandidate(extractId, sample, extractMode === "result_list" ? "result_list" : "single");
 }
 
+function extractSpecFromManifest(extract: Record<string, unknown>): ExtractSpec | null {
+  if (extract.kind === "composite") {
+    return parseExtractSpec(JSON.stringify(extract));
+  }
+  if (
+    extract.kind === "marked_list" ||
+    extract.kind === "marked_single" ||
+    extract.kind === "marked_page"
+  ) {
+    return parseExtractSpec(JSON.stringify(extract));
+  }
+  return null;
+}
+
+function isTeachMarkedManifest(extract: Record<string, unknown>): boolean {
+  return extract.kind === "composite" || extractSpecFromManifest(extract) !== null;
+}
+
 function outputSchemaFromExtract(
   extract: Record<string, unknown>,
   outputName: string,
 ): Record<string, unknown> {
-  if (extract.kind === "marked_list" && Array.isArray(extract.fields)) {
-    const fields = extract.fields as Array<{ key: string }>;
-    return {
-      results: {
-        type: "array",
-        items: Object.fromEntries(fields.map((field) => [field.key, { type: "string" }])),
-      },
-    };
-  }
-  if (extract.kind === "marked_page" && Array.isArray(extract.fields)) {
-    const fields = extract.fields as Array<{ key: string }>;
-    return Object.fromEntries(fields.map((field) => [field.key, { type: "string" }]));
+  const spec = extractSpecFromManifest(extract);
+  if (spec) {
+    return outputSchemaFromSpec(spec, outputName);
   }
   if (extract.kind === "result_rows") {
     return {
-      results: {
+      items: {
         type: "array",
-        items: { name: { type: "string" }, number: { type: "string" }, address: { type: "string" } },
+        items: { field_1: { type: "string" }, field_2: { type: "string" }, field_3: { type: "string" } },
       },
     };
   }
@@ -338,8 +446,9 @@ function outputSchemaFromExtract(
 }
 
 function outputNameFromExtract(extract: Record<string, unknown>, fallback: string): string {
-  if (extract.kind === "marked_list" || extract.kind === "result_rows") return "results";
-  if (extract.kind === "marked_page") return Object.keys((extract.fields as Array<{ key: string }>) ?? {})[0] ?? fallback;
+  const spec = extractSpecFromManifest(extract);
+  if (spec) return primaryOutputName(spec, fallback);
+  if (extract.kind === "result_rows") return "items";
   return fallback;
 }
 
@@ -376,6 +485,9 @@ export async function publishUserEndpoint(
     templatingSample?: string;
     inputSelector?: string;
     formFieldsJson?: string;
+    stagesJson?: string;
+    submitSelector?: string;
+    requiresSession?: boolean;
     fixedConnectorId?: string;
   },
 ): Promise<{ ok: true; connectorId: string } | { ok: false; message: string }> {
@@ -396,13 +508,33 @@ export async function publishUserEndpoint(
   const apiInput = kind === "read" ? "" : input.inputName === "page" ? "query" : input.inputName;
   const sample = (input.sampleOutput ?? "").trim();
   const templating = (input.templatingSample ?? sample).trim();
-  const extract = manifestExtract(input.extractJson, input.extractId ?? "main", sample, input.extractMode);
+  const extract = manifestExtract(
+    input.extractJson,
+    input.extractId ?? "main",
+    sample,
+    input.extractMode,
+    input.outputName,
+  );
   const publishedOutputName = outputNameFromExtract(extract, input.outputName);
   let formFields: Array<{ key: string; selector: string }> = [];
   try {
     formFields = JSON.parse(input.formFieldsJson ?? "[]") as Array<{ key: string; selector: string }>;
   } catch {
     formFields = [];
+  }
+  let stages: Array<{ url: string; fields: Array<{ key: string; selector: string }>; clickSelector?: string }> = [];
+  try {
+    const parsed = JSON.parse(input.stagesJson ?? "[]") as typeof stages;
+    if (Array.isArray(parsed)) stages = parsed.filter((stage) => stage && typeof stage.url === "string");
+  } catch {
+    stages = [];
+  }
+  const teachMarked = isTeachMarkedManifest(extract);
+  if (teachMarked) {
+    const spec = extractSpecFromManifest(extract);
+    if (!spec || !compositeReady(normalizeToComposite(spec))) {
+      return { ok: false, message: "Finish mapping outputs on the result page before publishing." };
+    }
   }
   const inputSchema =
     kind === "read"
@@ -414,11 +546,25 @@ export async function publishUserEndpoint(
           ]),
         );
   const resultUrl = kind === "read" ? input.url1 : templatizeResultUrl(input.url2, apiInput || "query", templating);
-  const graph = compileStudioGraph({ ...input, kind, url2: resultUrl });
-  const chosen = replayStudioGraph(graph, input.pattern);
-  const other = replayStudioGraph(graph, input.pattern === "P2" ? "P3" : "P2");
-  if (!chosen.ok || other.ok) {
-    return { ok: false, message: "Teaching replay failed. Check the result page URL and how the site behaves after submit." };
+  const waitSelector = waitSelectorFromExtract(extract);
+  const graph = teachMarked
+    ? compileTeachGraph({
+        startUrl: input.url1,
+        resultUrl,
+        kind,
+        pattern: input.pattern,
+        formFields,
+        submitSelector: input.submitSelector?.trim() || undefined,
+        waitSelector,
+        stages: stages.length ? stages : undefined,
+      })
+    : compileStudioGraph({ ...input, kind, url2: resultUrl });
+  if (!teachMarked) {
+    const chosen = replayStudioGraph(graph, input.pattern);
+    const other = replayStudioGraph(graph, input.pattern === "P2" ? "P3" : "P2");
+    if (!chosen.ok || other.ok) {
+      return { ok: false, message: "Teaching replay failed. Check the result page URL and how the site behaves after submit." };
+    }
   }
   const connectorVersion = "1.0.0";
   const manifest = {
@@ -437,9 +583,16 @@ export async function publishUserEndpoint(
     extract,
     input_selector: input.inputSelector?.trim() || undefined,
     form_fields: formFields.length ? formFields : undefined,
+    submit_selector: input.submitSelector?.trim() || undefined,
+    requires_session: input.requiresSession === true ? true : undefined,
     inputs: inputSchema,
     outputs: outputSchemaFromExtract(extract, input.outputName),
     graph,
+    max_results: Math.min(
+      500,
+      Math.max(1, Number((existingRow[0]?.manifest as { max_results?: number } | undefined)?.max_results) || 50),
+    ),
+    test_passed: false,
   };
   const existing = existingRow;
   if (existing[0]) {

@@ -1,7 +1,15 @@
 export type GraphStep =
   | { id: string; type: "navigate"; url: string; timeout_ms?: number }
-  | { id: string; type: "fill"; field: string; timeout_ms?: number }
-  | { id: string; type: "click"; timeout_ms?: number }
+  | { id: string; type: "fill"; field: string; selector: string; timeout_ms?: number }
+  | { id: string; type: "click"; selector?: string; timeout_ms?: number }
+  | {
+      id: string;
+      type: "wait";
+      selector?: string;
+      urlPattern?: string;
+      loadState?: "domcontentloaded" | "networkidle";
+      timeout_ms?: number;
+    }
   | { id: string; type: "branch"; patterns: Array<"P1" | "P2" | "P3">; then: string; timeout_ms?: number }
   | { id: string; type: "extract"; timeout_ms?: number };
 

@@ -25,9 +25,9 @@
     "dev:gateways": "node scripts/dev-gateways.mjs",
     "dev:worker": "pnpm --filter @shadowapi/worker dev",
     "dev:workers": "node scripts/dev-workers.mjs",
-    "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build",
-    "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run typecheck",
-    "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/gateway --filter @shadowapi/worker --filter @shadowapi/portal run test",
+    "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build",
+    "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run typecheck",
+    "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/teach-extract --filter @shadowapi/gateway --filter @shadowapi/worker --filter @shadowapi/portal run test",
     "lint": "eslint ."
   }
 }

@@ -10,7 +10,17 @@ import {
   shouldPassThroughBrowseBody,
   spaStaticAssetFallbackUrls,
   stripTeachTrackerScripts,
+  isTeachCmpTelemetryPath,
+  teachStubUnauthorizedBody,
+  upstreamBrowseRequestHeaders,
+  teachCmpTelemetryStub,
 } from "../src/browse/rewrite.js";
+import {
+  browseCookieJarKey,
+  clearBrowseCookieJars,
+  mergeBrowseSetCookies,
+  readBrowseCookieHeader,
+} from "../src/browse/browse-cookie-jar.js";
 
 describe("browse rewrite", () => {
   it("rewrites root-relative url() in CSS against the real stylesheet URL", () => {
@@ -101,6 +111,31 @@ describe("browse rewrite", () => {
     assert.match(out.contentType ?? "", /json/);
   });
 
+  it("decodes &amp; in href before proxying", () => {
+    const page = new URL("https://www.royalmail.com/track");
+    const html = `<iframe src="https://consent.trustarc.com/notice?domain=royalmail.com&amp;c=teconsent"></iframe>`;
+    const out = rewriteHtml(html, page, "", "http://localhost:3001");
+    assert.doesNotMatch(out, /&amp;c=/);
+    assert.match(out, /consent\.trustarc\.com%2Fnotice%3Fdomain%3Droyalmail\.com%26c%3Dteconsent/);
+  });
+
+  it("recognizes TrustArc CMP telemetry paths for teach stubs", () => {
+    assert.equal(isTeachCmpTelemetryPath(new URL("https://www.royalmail.com/consent/log?type=x")), true);
+    assert.equal(isTeachCmpTelemetryPath(new URL("https://www.royalmail.com/cm/royalmail.com/opt-out/domains")), true);
+    assert.equal(isTeachCmpTelemetryPath(new URL("https://www.royalmail.com/track")), false);
+    assert.equal(teachCmpTelemetryStub(new URL("https://x/cm/a")).body, "[]");
+    assert.equal(teachCmpTelemetryStub(new URL("https://x/consent/log")).body, "{}");
+  });
+
+  it("rewrites TrustArc root /asset and /analytics paths in notice HTML", () => {
+    const page = new URL("https://consent.trustarc.com/notice?domain=royalmail.com");
+    const html = `<script src="/asset/notice.js/v/1"></script><a href="/analytics?action=0">x</a>`;
+    const out = rewriteHtml(html, page, "", "http://localhost:3001");
+    assert.match(out, /api\/browse\?u=.*consent\.trustarc\.com%2Fasset%2Fnotice\.js/);
+    assert.match(out, /api\/browse\?u=.*consent\.trustarc\.com%2Fanalytics/);
+    assert.doesNotMatch(out, /src="\/asset\//);
+  });
+
   it("strips cookieyes and GTM inline loaders from HTML", () => {
     const html = `<html><head><script src="https://cdn-cookieyes.com/client_data/abc/script.js"></script><script>window.__loadInlineTrackers=function(){}</script></head></html>`;
     const out = stripTeachTrackerScripts(html);
@@ -113,5 +148,46 @@ describe("browse rewrite", () => {
     const out = stripTeachTrackerScripts(html);
     assert.match(out, /window\.__inlineTrackers=window\.__inlineTrackers/);
     assert.match(out, /__inlineTrackers\.push/);
+  });
+
+  it("does not forward portal browser cookies upstream; uses server jar instead", () => {
+    const target = new URL("https://api-web.royalmail.com/mailpieces/microsummary/v1/summary/AA123");
+    const headers = upstreamBrowseRequestHeaders({
+      incoming: {
+        get(name: string) {
+          if (name === "x-ibm-client-id") return "client-id-test";
+          if (name === "cookie") return "portal_session=abc; ak_bmsc=should-not-forward";
+          if (name === "x-shadow-teach-site") return "https://www.royalmail.com/track-your-item";
+          return null;
+        },
+      },
+      target,
+      defaultUserAgent: "ua",
+      defaultAccept: "application/json",
+      upstreamCookie: "lagrange_session=xyz",
+    });
+    assert.equal(headers["x-ibm-client-id"], "client-id-test");
+    assert.equal(headers.cookie, "lagrange_session=xyz");
+    assert.equal(headers.referer, "https://www.royalmail.com/track-your-item");
+    assert.equal(headers.origin, "https://www.royalmail.com");
+  });
+
+  it("stores Set-Cookie from upstream on the teach jar", () => {
+    clearBrowseCookieJars();
+    const target = new URL("https://goldprice.org/live-gold-price.html");
+    const key = browseCookieJarKey("tenant-1", target);
+    mergeBrowseSetCookies(key, {
+      headers: {
+        getSetCookie: () => ["wcid=abc; Path=/; HttpOnly", "lagrange_session=s1; Path=/"],
+      },
+    } as Response);
+    assert.equal(readBrowseCookieHeader(key), "wcid=abc; lagrange_session=s1");
+    clearBrowseCookieJars();
+  });
+
+  it("stubs plain unauthorized access bodies for teach preview", () => {
+    const stub = teachStubUnauthorizedBody("UnAuthorized Access!");
+    assert.ok(stub);
+    assert.equal(stub?.body, "{}");
   });
 });

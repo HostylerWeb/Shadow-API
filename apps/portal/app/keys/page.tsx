@@ -2,7 +2,8 @@ import { cookies } from "next/headers";
 import Link from "next/link";
 import { createDb } from "@shadowapi/db";
 import { MAX_CUSTOMER_KEYS, listApiKeys, userCreatedKeyCount } from "../../src/accounts";
-import { createKeyAction, dismissKeyAction, requireSession, revokeKeyAction } from "../actions";
+import { createKeyAction, dismissKeyAction, requireSession, revealKeyAction, revokeKeyAction } from "../actions";
+import { RevealKey } from "./reveal-key";
 
 export default async function KeysPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const session = await requireSession();
@@ -43,9 +44,13 @@ export default async function KeysPage({ searchParams }: { searchParams: Promise
         {keys.length === 0 ? <li className="card empty-state">No keys yet. Create one when you are ready to call an endpoint from code.</li> : null}
         {keys.map((key) => (
           <li key={key.id}>
-            <span>
-              {key.name} · {key.keyPrefix}…
-            </span>
+            <RevealKey
+              keyId={key.id}
+              name={key.name}
+              prefix={key.keyPrefix}
+              canReveal={Boolean(key.hasSecret)}
+              reveal={revealKeyAction}
+            />
             <form action={revokeKeyAction}>
               <input type="hidden" name="id" value={key.id} />
               <button type="submit" className="btn-ghost">

@@ -30,9 +30,6 @@ export function sampleHasValues(rows: Record<string, string>[]): boolean {
 
 export function nextFieldKey(existing: TeachField[]): string {
   const used = new Set(existing.map((f) => f.key));
-  for (const name of ["name", "number", "address", "title", "value"]) {
-    if (!used.has(name)) return name;
-  }
   let n = 1;
   while (used.has(`field_${n}`)) n += 1;
   return `field_${n}`;
@@ -48,10 +45,9 @@ export function buildPageExtract(fields: TeachField[]): MarkedExtract | null {
 
 export function nextFormInputKey(existing: TeachField[]): string {
   const used = new Set(existing.map((f) => f.key));
-  for (const name of ["query", "search", "email", "username", "postcode", "reference"]) {
-    if (!used.has(name)) return name;
-  }
-  return nextFieldKey(existing);
+  let n = 1;
+  while (used.has(`input_${n}`)) n += 1;
+  return `input_${n}`;
 }
 
 export function newTeachField(
