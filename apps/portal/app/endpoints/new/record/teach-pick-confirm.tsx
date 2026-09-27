@@ -1,12 +1,13 @@
 "use client";
 
-import type { PickElementMeta, PickPayload } from "../../../../src/teach/protocol";
+import { useState } from "react";
+import type { PickElementMeta, PickPayload, TeachControl } from "../../../../src/teach/protocol";
 import type { PickMode } from "./use-teach-picker";
 
 type Props = {
   mode: PickMode;
   payload: PickPayload;
-  onConfirm: () => void;
+  onConfirm: (control?: TeachControl) => void;
   onCancel: () => void;
 };
 
@@ -15,6 +16,9 @@ export function TeachPickConfirm({ mode, payload, onConfirm, onCancel }: Props) 
   const hint = hintFor(mode, payload.meta, payload.text);
   const sample = payload.text?.trim() || "";
   const elementLabel = elementSummary(payload.meta);
+  const formPick = mode.kind === "pickFormInput" || mode.kind === "pickReplaceFormField" || mode.kind === "pickInput" || mode.kind === "pickSubmit";
+  const rowTooWide = mode.kind === "pickRow" && payload.meta.matchingRows > 100;
+  const [control, setControl] = useState<TeachControl>(initialControl(mode.kind, payload.meta));
 
   return (
     <section className="teach-pick-confirm" aria-labelledby="teach-pick-title">
@@ -53,6 +57,18 @@ export function TeachPickConfirm({ mode, payload, onConfirm, onCancel }: Props) 
         ) : null}
       </div>
 
+      {formPick ? (
+        <label className="muted">
+          Control kind
+          <select aria-label="Control kind" value={control} onChange={(event) => setControl(event.target.value as TeachControl)}>
+            <option value="text">Text or number</option>
+            <option value="select">Dropdown</option>
+            <option value="checkbox">Checkbox</option>
+            <option value="click">Button (always click, not an input)</option>
+          </select>
+        </label>
+      ) : null}
+
       {hint ? (
         <p className={`teach-pick-alert${hint.severity === "warn" ? " teach-pick-alert-warn" : ""}`} role="status">
           {hint.message}
@@ -60,8 +76,8 @@ export function TeachPickConfirm({ mode, payload, onConfirm, onCancel }: Props) 
       ) : null}
 
       <div className="teach-pick-actions">
-        <button type="button" className="btn-primary" onClick={onConfirm}>
-          Yes, use this
+        <button type="button" className="btn-primary" disabled={rowTooWide} onClick={() => onConfirm(formPick ? control : undefined)}>
+          {rowTooWide ? "Pick a smaller row" : "Yes, use this"}
         </button>
         <button type="button" className="teach-pick-cancel" onClick={onCancel}>
           No, pick again
@@ -69,6 +85,15 @@ export function TeachPickConfirm({ mode, payload, onConfirm, onCancel }: Props) 
       </div>
     </section>
   );
+}
+
+function initialControl(kind: PickMode["kind"], meta: PickElementMeta): TeachControl {
+  if (kind === "pickSubmit") return "click";
+  if (meta.control === "select" || meta.control === "checkbox" || meta.control === "text" || meta.control === "click") {
+    return meta.control;
+  }
+  if (meta.tag === "select") return "select";
+  return "text";
 }
 
 function titleForMode(mode: PickMode): { title: string; subtitle: string } {
@@ -115,6 +140,12 @@ function hintFor(
     return {
       severity: "warn",
       message: "No similar rows matched. Click one full result row, not the whole list wrapper.",
+    };
+  }
+  if (mode.kind === "pickRow" && meta.matchingRows > 100) {
+    return {
+      severity: "warn",
+      message: "This matches too much of the page. Click one result card, not a box that also wraps the menu or headings.",
     };
   }
   if (mode.kind === "pickRow" && meta.matchingRows === 1) {

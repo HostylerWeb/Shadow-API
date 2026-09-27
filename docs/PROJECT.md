@@ -72,7 +72,7 @@ Clients only call a thin **control plane** (REST + MCP). Live browser work runs 
 | Database | **PostgreSQL** — tenants, API keys, jobs, connector versions, usage, audit |
 | Queue, locks, rate limits, hot cache | **Redis** + **BullMQ** |
 | Artifacts | **S3-compatible** object storage; gateway issues short-lived signed URLs |
-| Live execution | **Worker** process only — Camofox, proxies, graph runner. Never inside API replicas |
+| Live execution | **Worker** process only — Camoufox, proxies, graph runner. Never inside API replicas |
 | Customer portal / Studio (later) | **Next.js** |
 | Billing | Local plan gateway (`POST /v1/billing/plan`) plus metered **cached** vs **live** runs. No payment provider yet. |
 
@@ -208,7 +208,7 @@ These pivots follow technical review of the original “generic stealth infra”
 - Manages **session vault** encrypt/decrypt; coordinates **session locks**
 - Stores job results; issues **short-lived signed URLs** for PDFs/images (never expose carrier temp URLs to clients)
 
-### 6.2 Camofox execution engine
+### 6.2 Camoufox execution engine
 
 - Firefox-based browser with **C++-level fingerprint spoofing** (canvas, WebGL, audio, fonts, etc.) vs fragile JS patches
 - **Residential / datacenter proxy** strategies per connector manifest
@@ -223,14 +223,14 @@ These pivots follow technical review of the original “generic stealth infra”
 **Dashboard flow:**
 
 1. User creates an account and signs in to the **tenant dashboard**.  
-2. In **Studio**, they use an **embedded Camofox** session (preview) to use the target site like a human — login, MFA, and consent once; state is stored in the **vault** for that tenant + connector, isolated from other tenants.  
+2. In **Studio**, they use an **embedded Camoufox** session (preview) to use the target site like a human — login, MFA, and consent once; state is stored in the **vault** for that tenant + connector, isolated from other tenants.  
 3. They **record a multi-step workflow**, not a single URL. A connector graph may include several navigations (e.g. `https://domain.com/tracking` → submit parcel number → land on `https://domain.com/result?tracking=123` or `/result/123`).  
 4. They define **inputs** and **outputs**, compile an **execution graph**, and **publish**.  
 5. Integrators get **one public endpoint per connector** (`POST /v1/jobs` + `connector_id`); internal URLs and steps are not part of the customer API.
 
 **Studio capabilities:**
 
-- Embedded Camofox (and/or VNC where needed) for human navigation, MFA, and consent flows  
+- Embedded Camoufox (and/or VNC where needed) for human navigation, MFA, and consent flows  
 - Record interactions across **multiple pages and URLs** in one graph  
 - Define **input variables** and **output fields** per step where needed  
 - Compile to **execution graph** (JSON); pin **`graph_version`** separate from **`connector_version`**  
@@ -271,7 +271,7 @@ Integrators **never** send cookies or storage in API requests. They send an opti
 Every authenticated job is tied to one tenant via the API key. When a job needs a logged-in portal, the **worker** (not the poll-heavy gateway) loads that tenant’s vault row, decrypts it, runs in an isolated browser context, then optionally writes refreshed state back.
 
 ```
-Client                    Gateway                         Worker (Camofox)
+Client                    Gateway                         Worker (Camoufox)
   │                          │                                  │
   │  POST /v1/jobs           │                                  │
   │  Bearer: api_key         │  validate key → tenant_id        │
@@ -297,7 +297,7 @@ Primary store is **`sessions`** in PostgreSQL (not Redis). Redis holds locks and
   "tenant_id": "org_99812",
   "connector_id": "carrier_x_pod",
   "session_generation": 3,
-  "encrypted_storage_state": "<AES-256-GCM ciphertext of Playwright/Camofox storageState JSON>",
+  "encrypted_storage_state": "<AES-256-GCM ciphertext of Playwright/Camoufox storageState JSON>",
   "proxy_sticky_key": "optional — egress binding when cookies tie to IP",
   "updated_at": "..."
 }
@@ -318,12 +318,12 @@ Poll and result endpoints only read job state; they never touch the vault.
 
 **3. Browser context isolation (worker)**
 
-Do not cold-start a new browser **executable** per job (too slow). Run a **pool of warm Camofox processes** per worker machine. For each job:
+Do not cold-start a new browser **executable** per job (too slow). Run a **pool of warm Camoufox processes** per worker machine. For each job:
 
 - Acquire manifest-appropriate **session lock** (`read_shared` or `exclusive`).
 - Decrypt storage state in worker memory only.
 - `browser.newContext({ storageState, … })` — a strict incognito-like context: **no shared cookies, cache, or storage** with other contexts on the same host.
-- Apply Camofox fingerprint + manifest proxy profile on that context.
+- Apply Camoufox fingerprint + manifest proxy profile on that context.
 - Execute the graph on `context.newPage()`.
 
 Two tenants at the same millisecond → two contexts (or two workers), two decrypted states, no shared memory for auth data.
@@ -361,7 +361,7 @@ They call the same endpoint whether or not a vault session exists. Catalog users
 
 ### 7.1 Build phase (Studio)
 
-1. Tenant user signs in to the dashboard; opens Studio with **embedded Camofox** (tenant-isolated session / vault as needed)
+1. Tenant user signs in to the dashboard; opens Studio with **embedded Camoufox** (tenant-isolated session / vault as needed)
 2. Records **all steps and URLs** in the flow (e.g. tracking page → result page), including which **P1 / P2 / P3** pattern applies after submit
 3. Defines inputs (e.g. `tracking_number`, `include_pod_document`) and outputs (`status`, `document_url`)
 4. Binds steps to stable selectors / a11y refs; compiles graph
@@ -629,42 +629,20 @@ Publish `connector-manifest.json` at a stable `$schema` URL (e.g. `https://schem
 
 ## 17. Implementation roadmap
 
-Step-by-step checklists live in [ROADMAP.md](./ROADMAP.md). The phases below are the same plan, compressed.
+**Authoritative checklists:** [ROADMAP.md](./ROADMAP.md) (chapters 1–16) and [PROGRESS.md](./PROGRESS.md) (what is done locally).
 
-### Phase 0 — Foundation
+| Phase (compressed) | ROADMAP chapters | Status (local dev) |
+|--------------------|------------------|-------------------|
+| Foundation + API + queue | 1–4 | Done |
+| Graph runner + `carrier_x_pod` | 5–6 | Done |
+| Camoufox worker, vault, artifacts | 7–8 | Done |
+| MCP + portal + billing + scale | 9–12 | Done |
+| Studio / teach + repair + 2nd connector | 13–15 | Done (see `apps/studio-browser` for embedded Camoufox authoring) |
+| Production launch | 16 | Not started — [LAUNCH-CHECKLIST.md](./LAUNCH-CHECKLIST.md) |
 
-- [ ] Monorepo: `apps/gateway` (Fastify), `apps/worker` (BullMQ consumer), `packages/core`, `packages/graph-runner`
-- [ ] PostgreSQL job store + state machine; Redis queue, idempotency, rate limits
-- [ ] Connector manifest registry + CI linter + meta-schema
-- [ ] REST `/v1/jobs` on the gateway (MCP uses the same services later)
+**Vault crypto (today):** AES-256-GCM with a single deployment key (`VAULT_DATA_KEY`). Production launch targets KMS or per-tenant data keys (Chapter 16).
 
-### Phase 1 — Runtime core
-
-- [ ] Worker-only Camofox integration (launch, proxy, teardown) — API process stays browser-free
-- [ ] Graph runner v1 in `packages/graph-runner` (steps, branches, timeouts)
-- [ ] Session vault + Redis locks (`read_shared` / `exclusive`)
-- [ ] S3 artifacts + signed URLs from the gateway
-
-### Phase 2 — First connector
-
-- [ ] `carrier_x_pod` graph `v1.0.1-g2`
-- [ ] Seven staging fixtures + integration tests (graph runner without live browser where fixtures allow)
-- [ ] Pre-flight validation (zip vs session_id)
-- [ ] Redis cache with `ttl_by_status`; cached reads do not occupy a worker
-
-### Phase 3 — MCP & Studio
-
-- [ ] MCP on the Fastify gateway (or a thin sibling) over the same job service — not a second business logic stack
-- [ ] Next.js portal: API keys, usage, connector docs
-- [ ] Studio MVP (Next.js): record → graph compile → publish manifest
-- [ ] Repair lane UI (diff review, staging promote)
-
-### Phase 4 — Commercial
-
-- [ ] Plan billing (cached vs live meters), API keys, Redis rate limits
-- [ ] Horizontal gateway replicas; worker autoscaling on queue depth; per-tenant concurrency caps
-- [ ] Second vertical connector (template reuse)
-- [ ] Enterprise: dedicated capacity, BYO proxy
+**Browser pool (today):** Workers reuse a Camoufox browser instance where possible; each job gets an isolated context with its own `storageState`.
 
 ---
 
@@ -675,7 +653,7 @@ Step-by-step checklists live in [ROADMAP.md](./ROADMAP.md). The phases below are
 | **Connector** | A published integration (`connector_id`) with manifest + graph |
 | **`connector_version`** | Semver of API contract (input/output schema) |
 | **`graph_version`** | Pin of execution steps (can change without schema bump) |
-| **Camofox** | Stealth Firefox build used by the execution engine |
+| **Camoufox** | Stealth Firefox build used by the execution engine |
 | **Vault session** | Encrypted `storageState` (cookies/localStorage) in Postgres, keyed by `session_id` and scoped to `tenant_id` + `connector_id` |
 | **`session_generation`** | Monotonic counter for cache correctness after reauth |
 | **Repair lane** | Offline LLM-assisted graph fix workflow |
@@ -694,11 +672,15 @@ Step-by-step checklists live in [ROADMAP.md](./ROADMAP.md). The phases below are
 
 ---
 
-## Related artifacts (to add in repo)
+## Related artifacts (in repo)
 
-- `schemas/v1/connector-manifest.json` — meta-schema
-- `connectors/carrier_x_pod/v1.0.1/manifest.json` — frozen connector
-- `connectors/carrier_x_pod/graphs/v1.0.1-g2.json` — execution graph
-- `connectors/carrier_x_pod/fixtures/*` — staging replay
-- `docs/MCP.md` — tool descriptions and agent polling guide
-- `docs/RISK-REGISTER.md` — full likelihood × impact matrix
+- `connectors/*/manifest.json` — connector contracts
+- `connectors/*/manifest.schema.json` — meta-schema (validated by `pnpm lint:manifests`)
+- `connectors/*/graph.*.json` — versioned execution graphs
+- `connectors/*/fixtures/*` — staging replay
+- `docs/openapi/v1.openapi.json` — REST contract
+- `docs/MCP.md` — MCP tools and polling
+- `docs/RISK-REGISTER.md` — risk matrix
+- `docs/runbooks/*.md` — per-connector ops
+- `docs/LAUNCH-CHECKLIST.md` — Chapter 16
+- `apps/studio-browser` — embedded Camoufox authoring service (portal connects via WebSocket)

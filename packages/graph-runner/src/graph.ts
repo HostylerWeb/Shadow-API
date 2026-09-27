@@ -1,6 +1,8 @@
 export type GraphStep =
   | { id: string; type: "navigate"; url: string; timeout_ms?: number }
-  | { id: string; type: "fill"; field: string; selector: string; timeout_ms?: number }
+  | { id: string; type: "fill"; field: string; selector: string; sample?: string; timeout_ms?: number }
+  | { id: string; type: "select"; field: string; selector: string; sample?: string; timeout_ms?: number }
+  | { id: string; type: "check"; field: string; selector: string; sample?: string; timeout_ms?: number }
   | { id: string; type: "click"; selector?: string; timeout_ms?: number }
   | {
       id: string;

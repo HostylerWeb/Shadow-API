@@ -1,8 +1,8 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "@shadowapi/db";
 import type { Db } from "@shadowapi/db";
 import { decryptVault, encryptVault, liveCap } from "@shadowapi/core";
 import { connectorVersions, jobs, tenants, usageEvents, vaultSessions } from "@shadowapi/db/schema";
-import { createApiKey, loadPortalUser, usageCounts } from "./accounts.js";
+import { createApiKey, loadPortalUser, usageCounts } from "./accounts";
 
 export async function dashboardSecret(db: Db, userId: string): Promise<string> {
   const user = await loadPortalUser(db, userId);

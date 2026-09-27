@@ -4,7 +4,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createDb } from "@shadowapi/db";
 import { tenants } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 import { authorIsActive, loadPortalUser } from "../src/accounts";
 import { readSession } from "../src/session";
 import { Shell } from "./shell";

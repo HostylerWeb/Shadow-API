@@ -1,6 +1,6 @@
 import { createDb } from "@shadowapi/db";
 import { tenants } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 import { LIVE_CAPS, liveCap } from "@shadowapi/core";
 import { usageCounts } from "../../src/accounts";
 import { liveRunsThisMonth } from "../../src/dashboard";

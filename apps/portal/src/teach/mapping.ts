@@ -51,7 +51,7 @@ export function nextFormInputKey(existing: TeachField[]): string {
 }
 
 export function newTeachField(
-  partial: Pick<TeachField, "key" | "selector"> & { sampleText?: string; elementTag?: string },
+  partial: Pick<TeachField, "key" | "selector"> & { sampleText?: string; elementTag?: string; control?: TeachField["control"] },
 ): TeachField {
   return {
     id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `f-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -59,5 +59,6 @@ export function newTeachField(
     selector: partial.selector,
     sampleText: partial.sampleText,
     elementTag: partial.elementTag,
+    control: partial.control,
   };
 }

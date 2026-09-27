@@ -47,6 +47,13 @@ jobs:
       - run: pnpm --filter @shadowapi/db run build
       - run: pnpm db:migrate
       - run: pnpm lint
+      - run: pnpm lint:manifests
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+        env:
+          DATABASE_URL: postgres://shadowapi:shadowapi@localhost:5432/shadowapi
+          REDIS_URL: redis://localhost:6379
+          GATEWAY_URL: http://localhost:3000
+          PORTAL_SESSION_SECRET: ci-portal-session
+          VAULT_DATA_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=

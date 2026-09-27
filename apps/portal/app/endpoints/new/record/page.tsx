@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { Breadcrumb } from "../../../breadcrumb";
 import { publishEndpointAction, requireSession } from "../../../actions";
+import { studioBrowserConfigured } from "../../../../src/studio-token";
 import { SiteBrowser } from "./site-browser";
 
 export default async function RecordEndpointPage({
@@ -14,6 +15,11 @@ export default async function RecordEndpointPage({
   const description = query.description?.trim() ?? "";
   const url = query.url?.trim() ?? "";
   if (!title || !description || !url) redirect("/endpoints/new");
+  try {
+    new URL(url.includes("://") ? url : `https://${url}`);
+  } catch {
+    redirect("/endpoints/new?error=url");
+  }
   return (
     <main className="customer-page customer-page-teach">
       <Breadcrumb items={[{ href: "/endpoints", label: "My endpoints" }, { href: "/endpoints/new", label: "New endpoint" }, { label: title }]} />
@@ -23,6 +29,7 @@ export default async function RecordEndpointPage({
         description={description}
         url={url}
         showError={Boolean(query.error)}
+        studioEnabled={studioBrowserConfigured()}
       />
     </main>
   );

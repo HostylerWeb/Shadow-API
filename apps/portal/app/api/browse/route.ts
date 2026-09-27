@@ -4,6 +4,7 @@ import {
   decodeHtmlEntitiesInUrl,
   normalizeTeachApiBrowseResponse,
   rewriteCss,
+  rewriteEsmImports,
   rewriteHtml,
   rootFallbackAssetUrl,
   shouldPassThroughBrowseBody,
@@ -23,6 +24,9 @@ import {
 } from "../../../src/browse/browse-cookie-jar";
 import { browseErrorHtml } from "../../../src/browse/error-page";
 import { browseProxyClientScript } from "../../../src/browse/proxy-client-script";
+import { teachBrowseHostAllowed } from "../../../src/browse/teach-allowlist";
+import { fetchUpstreamDocument } from "../../../src/browse/upstream-fetch";
+import { createDb } from "@shadowapi/db";
 import { readSession, type Session } from "../../../src/session";
 import { teachInjectScript } from "../../../src/teach/inject-script";
 
@@ -103,11 +107,11 @@ async function fetchUpstream(target: URL, request: NextRequest, portalSession: S
     defaultAccept: request.headers.get("accept") ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     upstreamCookie: readBrowseCookieHeader(jarKey),
   });
-  const response = await fetch(target, {
-    method: request.method === "POST" ? "POST" : "GET",
+  const method = request.method === "POST" ? "POST" : "GET";
+  const response = await fetchUpstreamDocument(target, {
+    method,
     headers,
-    body: request.method === "POST" ? await request.arrayBuffer() : undefined,
-    redirect: "follow",
+    body: method === "POST" ? new Uint8Array(await request.arrayBuffer()) : undefined,
   }).catch((err: unknown) => {
     const nested = err instanceof Error && err.cause instanceof Error ? err.cause : null;
     const code = nested && "code" in nested ? String((nested as NodeJS.ErrnoException).code) : "";
@@ -129,6 +133,27 @@ async function handle(request: NextRequest) {
   if (!target) {
     const html = `<!doctype html><html><body style="font-family:sans-serif;padding:1.5rem"><p>This link stayed inside ShadowAPI instead of opening the website.</p><p>Use the address bar in the box, or go back and enter the website address again.</p></body></html>`;
     return new NextResponse(html, { status: 400, headers: { "content-type": "text/html; charset=utf-8" } });
+  }
+
+  const sessionHosts = (request.cookies.get("teach_allow_hosts")?.value ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    const { db, close } = createDb(dbUrl);
+    const allowed = await teachBrowseHostAllowed(db, portalSession.tenantId, target.hostname, sessionHosts);
+    await close();
+    if (!allowed) {
+      console.warn(`[browse] blocked host=${target.hostname} tenant=${portalSession.tenantId}`);
+      return new NextResponse(
+        browseErrorHtml(
+          "Site not allowed",
+          `Teach browse is limited to hosts you declared for this endpoint (or TEACH_BROWSE_ALLOWLIST). Add ${target.hostname} on the record screen or in your endpoint settings.`,
+        ),
+        { status: 403, headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    }
   }
 
   if (isTeachCmpTelemetryPath(target)) {
@@ -227,7 +252,10 @@ async function handle(request: NextRequest) {
   }
   if (effectiveType.includes("text/css") || effectiveType.includes("application/javascript") || effectiveType.includes("text/javascript")) {
     const text = await effectiveUpstream.text();
-    const body = effectiveType.includes("text/css") ? rewriteCss(text, resolved, portalOrigin) : text;
+    let body = effectiveType.includes("text/css") ? rewriteCss(text, resolved, portalOrigin) : text;
+    if (!effectiveType.includes("text/css")) {
+      body = rewriteEsmImports(body, resolved, portalOrigin);
+    }
     return new NextResponse(body, { status: effectiveUpstream.status, headers });
   }
   if (effectiveType.includes("font/") || effectiveType.includes("image/") || isFontAssetPath(target.pathname)) {

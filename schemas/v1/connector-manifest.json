@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Canonical copy — source of truth for validation is connectors/carrier_x_pod/manifest.schema.json",
+  "$ref": "../../connectors/carrier_x_pod/manifest.schema.json"
+}

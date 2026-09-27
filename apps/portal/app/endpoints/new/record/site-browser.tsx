@@ -1,11 +1,11 @@
 "use client";
 
-import { requestRowCount, setTeachHighlight } from "../../../../src/teach/iframe-bridge";
+import { requestReplay, requestRowCount, setTeachHighlight } from "../../../../src/teach/iframe-bridge";
 import { buildCompositeExtract } from "../../../../src/teach/build-spec";
 import type { ExtractBlock } from "@shadowapi/teach-extract";
 import { isCompositeExtract } from "@shadowapi/teach-extract";
 import { newTeachField, nextFieldKey, nextFormInputKey } from "../../../../src/teach/mapping";
-import type { PageIntent, PickPayload, TeachField } from "../../../../src/teach/protocol";
+import type { PageIntent, PickPayload, TeachControl, TeachField } from "../../../../src/teach/protocol";
 import type { SavedTeachDraft } from "../../../../src/teach/saved-draft";
 import { normalizePageKey, pageKeysMatch } from "../../../../src/teach/protocol";
 import {
@@ -15,6 +15,7 @@ import {
   hasResultPage,
   isReadOnlyWorkflow,
   lookupKind,
+  markInPlaceResult,
   pendingIntentUrl,
   type TeachSessionState,
 } from "../../../../src/teach/session";
@@ -22,19 +23,43 @@ import { mirrorBrowseHref } from "../../../../src/browse/browse-mirror";
 import { useDebouncedSample } from "../../../../src/teach/use-debounced-sample";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { TeachApiPreview } from "./teach-api-preview";
-import { TeachFieldList } from "./teach-field-list";
 import { computeTeachGuide, TeachNextStep, TeachProgressBar } from "./teach-guide";
 import { TeachPickConfirm } from "./teach-pick-confirm";
 import { TeachOutputFieldsBlock } from "./teach-output-fields";
 import { TeachResponseBuilder } from "./teach-response-builder";
 import { TeachRowBlock } from "./teach-row-block";
-import { TeachStep2Callout } from "./teach-step2-callout";
+import { StudioCamoufox } from "./studio-camoufox";
 import { TeachPageRecorder, type RecordedAction } from "./teach-page-recorder";
+import { TeachRecipeList, recipeId, type RecipeStep } from "./teach-recipe";
 import { isPicking, pickModeLabel, syncPickModeOnLoad, useTeachPicker, type PickMode } from "./use-teach-picker";
 
 type ResultShape = "list" | "single" | "object";
 
 type PendingPick = { mode: PickMode; payload: PickPayload };
+
+function sameSiteDocument(left: string, right: string): boolean {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    const path = (value: string) => (value.length > 1 && value.endsWith("/") ? value.slice(0, -1) : value);
+    return a.origin === b.origin && path(a.pathname) === path(b.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function apiKeyFromHint(hint: string, used: Set<string>): string {
+  const base = hint
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  if (!base || !/^[a-z]/.test(base)) return "";
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate)) candidate = `${base}_${n++}`;
+  return candidate;
+}
 
 function targetFromFrame(frame: HTMLIFrameElement, fallback: string): string {
   try {
@@ -90,6 +115,39 @@ function applySamples(fields: TeachField[], payload: Record<string, unknown>): T
   return changed ? next : fields;
 }
 
+function initialRecipe(saved?: SavedTeachDraft | null): RecipeStep[] {
+  if (!saved) return [];
+  const byKey = new Map(saved.formFields.map((field) => [field.key, field]));
+  if (saved.actions.length > 0) {
+    const steps: RecipeStep[] = [];
+    for (const action of saved.actions) {
+      if (action.type === "click") {
+        steps.push({ id: recipeId(), kind: "click", key: "", selector: action.selector, sample: "", label: action.label || "Click" });
+        continue;
+      }
+      const field = byKey.get(action.key);
+      if (!field) continue;
+      const kind: TeachControl = field.control && field.control !== "click" ? field.control : "text";
+      steps.push({ id: field.id, kind, key: field.key, selector: field.selector, sample: field.sampleText ?? "", label: "" });
+    }
+    return steps;
+  }
+  const steps: RecipeStep[] = saved.formFields
+    .filter((field) => field.control !== "click")
+    .map((field) => ({
+      id: field.id,
+      kind: field.control ?? "text",
+      key: field.key,
+      selector: field.selector,
+      sample: field.sampleText ?? "",
+      label: "",
+    }));
+  if (saved.submitSelector) {
+    steps.push({ id: recipeId(), kind: "click", key: "", selector: saved.submitSelector, sample: "", label: "Submit" });
+  }
+  return steps;
+}
+
 export function SiteBrowser({
   action,
   title,
@@ -97,6 +155,7 @@ export function SiteBrowser({
   url,
   showError,
   saved,
+  studioEnabled,
 }: {
   action: (formData: FormData) => void;
   title: string;
@@ -104,6 +163,7 @@ export function SiteBrowser({
   url: string;
   showError?: boolean;
   saved?: SavedTeachDraft | null;
+  studioEnabled?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const sampleOutput = useRef<HTMLInputElement>(null);
@@ -121,21 +181,38 @@ export function SiteBrowser({
   const [recordPhase, setRecordPhase] = useState<"idle" | "recording" | "paste" | "confirm">("idle");
   const [recordedActions, setRecordedActions] = useState<RecordedAction[]>([]);
   const [pasteUrl, setPasteUrl] = useState("");
-  const [teachStages, setTeachStages] = useState<Array<{ url: string; fields: Array<{ key: string; selector: string }>; clickSelector?: string }>>(
-    saved?.stages ?? [],
-  );
+  const [teachStages, setTeachStages] = useState<
+    Array<{
+      url: string;
+      fields: Array<{ key: string; selector: string; control?: TeachControl; sample?: string }>;
+      clickSelector?: string;
+      clicks?: Array<{ selector: string; label?: string }>;
+      actions?: Array<{ type: "field"; key: string } | { type: "click"; selector: string; label?: string }>;
+    }>
+  >(saved?.stages ?? []);
   const stageKey = useRef(1);
+  const recordStartUrl = useRef(url);
   const [pendingPick, setPendingPick] = useState<PendingPick | null>(null);
   const [addAnother, setAddAnother] = useState(false);
   const [rowSelector, setRowSelector] = useState(saved?.rowSelector ?? "");
   const [fields, setFields] = useState<TeachField[]>(saved?.fields ?? []);
-  const [formFields, setFormFields] = useState<TeachField[]>(saved?.formFields ?? []);
+  const [recipe, setRecipe] = useState<RecipeStep[]>(() => initialRecipe(saved));
+  const [replaying, setReplaying] = useState(false);
+  const [replayError, setReplayError] = useState("");
   const [outputName, setOutputName] = useState(saved?.outputName ?? "value");
   const [listArrayKey, setListArrayKey] = useState(saved?.listArrayKey ?? "items");
   const [extraBlocks, setExtraBlocks] = useState<ExtractBlock[]>(saved?.extraBlocks ?? []);
-  const [submitSelector, setSubmitSelector] = useState(saved?.submitSelector ?? "");
   const [requiresSession, setRequiresSession] = useState(saved?.requiresSession ?? false);
   const [rowCount, setRowCount] = useState<number | null>(null);
+  const formFields = useMemo(
+    () =>
+      recipe
+        .filter((step) => step.kind !== "click")
+        .map((step) => newTeachField({ key: step.key, selector: step.selector, sampleText: step.sample, control: step.kind })),
+    [recipe],
+  );
+  const submitSelector = [...recipe].reverse().find((step) => step.kind === "click")?.selector ?? "";
+  const clickCount = recipe.filter((step) => step.kind === "click").length;
 
   const extract = useMemo(() => {
     return buildCompositeExtract({
@@ -163,8 +240,9 @@ export function SiteBrowser({
   const onResultPage =
     hasResultPage(session) && pageKeysMatch(session.resultUrl, currentUrl);
   const onActionPage = Boolean(session.actionUrl) && pageKeysMatch(session.actionUrl, currentUrl);
-  const readOnlyWorkflow = isReadOnlyWorkflow(session);
-  const showFormSection = !readOnlyWorkflow && Boolean(session.actionUrl) && !onResultPage;
+  const readOnlyWorkflow = isReadOnlyWorkflow(session, { fieldCount: formFields.length, clickCount });
+  const inPlaceHere = Boolean(session.inPlace) && onResultPage;
+  const showFormSection = !readOnlyWorkflow && (Boolean(session.actionUrl) || inPlaceHere) && (!onResultPage || inPlaceHere);
   const awaitingResultLabel = !hasResultPage(session) && (formFields.length > 0 || Boolean(session.actionUrl));
 
   const { rows: sampleRows, previewPayload, error: sampleError, loading: sampleLoading, refresh: refreshSample } = useDebouncedSample(
@@ -202,7 +280,13 @@ export function SiteBrowser({
       setPendingPick({ mode: pickMode, payload });
       setPickMode({ kind: "idle" });
     },
+    shouldIgnoreNavigate: (navUrl) =>
+      recordPhase === "recording" && sameSiteDocument(recordStartUrl.current || currentUrl, navUrl),
     onNavigate: (navUrl) => {
+      if (recordPhase === "recording" && sameSiteDocument(recordStartUrl.current || currentUrl, navUrl)) {
+        setDraftUrl(navUrl);
+        return;
+      }
       setCurrentUrl(navUrl);
       setDraftUrl(navUrl);
       setPendingPick(null);
@@ -211,12 +295,20 @@ export function SiteBrowser({
     setPickMode,
     onRecorded: (action) => {
       if (pickMode.kind !== "record") return;
+      const recorded: RecordedAction = {
+        action: action.action,
+        selector: action.selector,
+        value: action.value,
+        text: action.text,
+        control: action.control,
+        keyHint: action.keyHint,
+      };
       setRecordedActions((prev) => {
-        if (action.action === "fill") {
-          const rest = prev.filter((item) => !(item.action === "fill" && item.selector === action.selector));
-          return [...rest, action];
+        if (recorded.action === "fill") {
+          const rest = prev.filter((item) => !(item.action === "fill" && item.selector === recorded.selector));
+          return [...rest, recorded];
         }
-        return [...prev, action];
+        return [...prev, recorded];
       });
     },
   });
@@ -267,8 +359,12 @@ export function SiteBrowser({
     if (!node) return;
     syncPickModeOnLoad(node, pickMode, rowSelector);
     const resolved = targetFromFrame(node, currentUrl);
-    setCurrentUrl(resolved);
-    setDraftUrl(resolved);
+    if (recordPhase === "recording" && sameSiteDocument(recordStartUrl.current || currentUrl, resolved)) {
+      setDraftUrl(resolved);
+    } else {
+      setCurrentUrl(resolved);
+      setDraftUrl(resolved);
+    }
     const read = () => {
       refreshSample();
       const doc = node.contentDocument;
@@ -292,21 +388,29 @@ export function SiteBrowser({
   }
 
   function commitRecordedPage(pageUrl: string) {
-    const fields: Array<{ key: string; selector: string }> = [];
-    let clickSelector: string | undefined;
+    const fields: Array<{ key: string; selector: string; control?: TeachControl; sample?: string }> = [];
+    const clicks: Array<{ selector: string; label?: string }> = [];
+    const actions: Array<{ type: "field"; key: string } | { type: "click"; selector: string; label?: string }> = [];
+    const added: RecipeStep[] = [];
+    const used = new Set(recipe.map((step) => step.key).filter(Boolean));
     for (const action of recordedActions) {
       if (action.action === "fill" && action.selector) {
-        fields.push({ key: `field_${stageKey.current++}`, selector: action.selector });
+        const control: TeachControl = action.control === "select" || action.control === "checkbox" ? action.control : "text";
+        const key = apiKeyFromHint(action.keyHint || "", used) || `field_${stageKey.current++}`;
+        used.add(key);
+        fields.push({ key, selector: action.selector, control, sample: action.value });
+        actions.push({ type: "field", key });
+        added.push({ id: recipeId(), kind: control, key, selector: action.selector, sample: action.value, label: "" });
       }
-      if (action.action === "click" && action.selector) clickSelector = action.selector;
+      if (action.action === "click" && action.selector) {
+        clicks.push({ selector: action.selector, label: action.text });
+        actions.push({ type: "click", selector: action.selector, label: action.text });
+        added.push({ id: recipeId(), kind: "click", key: "", selector: action.selector, sample: "", label: action.text || "Click" });
+      }
     }
-    const next = [...teachStages, { url: pageUrl, fields, clickSelector }];
-    setTeachStages(next);
-    setFormFields(next.flatMap((stage) => stage.fields).map((field) => newTeachField({ key: field.key, selector: field.selector })));
-    const lastClick = [...next].reverse().find((stage) => stage.clickSelector)?.clickSelector ?? "";
-    setSubmitSelector(lastClick);
+    setTeachStages((prev) => [...prev, { url: pageUrl, fields, clickSelector: clicks.at(-1)?.selector, clicks, actions }]);
+    setRecipe((prev) => [...prev, ...added]);
     setRecordedActions([]);
-    return next;
   }
 
   function labelPage(intent: PageIntent) {
@@ -317,7 +421,20 @@ export function SiteBrowser({
     setSession((s) => applyPageIntent(s, targetUrl, intent));
   }
 
-  function confirmPendingPick() {
+  function pushRecipeControl(selector: string, sample: string, control: TeachControl | undefined) {
+    const kind: TeachControl = control === "select" || control === "checkbox" || control === "click" ? control : "text";
+    setRecipe((prev) => {
+      if (kind === "click") {
+        return [...prev, { id: recipeId(), kind: "click", key: "", selector, sample: "", label: sample || "Click" }];
+      }
+      const existing = prev
+        .filter((step) => step.kind !== "click")
+        .map((step) => newTeachField({ key: step.key, selector: step.selector }));
+      return [...prev, { id: recipeId(), kind, key: nextFormInputKey(existing), selector, sample, label: "" }];
+    });
+  }
+
+  function confirmPendingPick(control?: TeachControl) {
     if (!pendingPick) return;
     const { mode, payload } = pendingPick;
     setPendingPick(null);
@@ -326,25 +443,10 @@ export function SiteBrowser({
       setRowSelector(payload.selector);
       return;
     }
-    if (mode.kind === "pickInput") {
-      setSession((s) => ({ ...s, inputSelector: payload.selector }));
-      setFormFields((prev) => {
-        if (prev.some((f) => f.selector === payload.selector)) return prev;
-        return [...prev, newTeachField({ key: nextFormInputKey(prev), selector: payload.selector, sampleText: payload.text, elementTag: payload.meta.tag })];
-      });
-      return;
-    }
-    if (mode.kind === "pickFormInput") {
-      setFormFields((prev) => [
-        ...prev,
-        newTeachField({
-          key: nextFormInputKey(prev),
-          selector: payload.selector,
-          sampleText: payload.text,
-          elementTag: payload.meta.tag,
-        }),
-      ]);
-      if (mode.addAnother) setPickMode({ kind: "pickFormInput", addAnother: true });
+    if (mode.kind === "pickInput" || mode.kind === "pickFormInput") {
+      if (mode.kind === "pickInput") setSession((s) => ({ ...s, inputSelector: payload.selector }));
+      pushRecipeControl(payload.selector, payload.text, control ?? (payload.meta.control === "element" ? "text" : payload.meta.control));
+      if (mode.kind === "pickFormInput" && mode.addAnother) setPickMode({ kind: "pickFormInput", addAnother: true });
       return;
     }
     if (mode.kind === "pickNewField") {
@@ -380,17 +482,18 @@ export function SiteBrowser({
       return;
     }
     if (mode.kind === "pickReplaceFormField") {
-      setFormFields((prev) =>
-        prev.map((f) =>
-          f.id === mode.fieldId
-            ? { ...f, selector: payload.selector, sampleText: payload.text, elementTag: payload.meta.tag }
-            : f,
+      const kind: TeachControl = control === "select" || control === "checkbox" || control === "text" || control === "click" ? control : "text";
+      setRecipe((prev) =>
+        prev.map((step) =>
+          step.id === mode.fieldId
+            ? { ...step, kind, selector: payload.selector, sample: kind === "click" ? "" : payload.text, label: kind === "click" ? payload.text || step.label : "" }
+            : step,
         ),
       );
       return;
     }
     if (mode.kind === "pickSubmit") {
-      setSubmitSelector(payload.selector);
+      pushRecipeControl(payload.selector, payload.text || "Submit", "click");
       return;
     }
     if (mode.kind === "pickExtraScalar") {
@@ -402,6 +505,26 @@ export function SiteBrowser({
         ),
       );
       return;
+    }
+  }
+
+  async function replayRecipe() {
+    setReplaying(true);
+    setReplayError("");
+    try {
+      await requestReplay(
+        frame.current,
+        recipe.map((step) =>
+          step.kind === "click"
+            ? { kind: "click" as const, selector: step.selector }
+            : { kind: step.kind, selector: step.selector, value: step.sample || (step.kind === "checkbox" ? "true" : "") },
+        ),
+      );
+      refreshSample();
+    } catch (err) {
+      setReplayError(err instanceof Error ? err.message : "Replay failed");
+    } finally {
+      setReplaying(false);
     }
   }
 
@@ -418,7 +541,13 @@ export function SiteBrowser({
     else sample = sampleRows[0]?.[outputName] ?? sampleRows[0]?.result ?? "";
     if (sampleOutput.current) sampleOutput.current.value = sample;
     if (extractJson.current && extract) extractJson.current.value = JSON.stringify(extract);
-    if (formFieldsJson.current) formFieldsJson.current.value = JSON.stringify(formFields.map(({ key, selector }) => ({ key, selector })));
+    if (formFieldsJson.current) {
+      formFieldsJson.current.value = JSON.stringify(
+        recipe
+          .filter((step) => step.kind !== "click")
+          .map((step) => ({ key: step.key, selector: step.selector, control: step.kind, sample: step.sample })),
+      );
+    }
     const stagesInput = document.querySelector<HTMLInputElement>('input[name="stagesJson"]');
     if (stagesInput) stagesInput.value = JSON.stringify(teachStages);
   }
@@ -438,12 +567,13 @@ export function SiteBrowser({
     onResultPage,
     hasResultPage: hasResultPage(session),
     actionUrlSet: Boolean(session.actionUrl),
-    formFieldCount: formFields.length,
+    formFieldCount: recipe.length,
     resultShape,
     hasRow: Boolean(rowSelector),
     outputFieldCount: fields.length,
     canPublish: canPublish(mergedSession),
     picking,
+    inPlace: Boolean(session.inPlace),
     pendingPick: Boolean(pendingPick),
   });
 
@@ -465,6 +595,17 @@ export function SiteBrowser({
       <input ref={sampleOutput} type="hidden" name="sampleOutput" defaultValue="" />
       <input ref={extractJson} type="hidden" name="extractJson" defaultValue="" />
       <input ref={formFieldsJson} type="hidden" name="formFieldsJson" defaultValue="[]" />
+      <input
+        type="hidden"
+        name="actionsJson"
+        value={JSON.stringify(
+          recipe.map((step) =>
+            step.kind === "click"
+              ? { type: "click", selector: step.selector, label: step.label }
+              : { type: "field", key: step.key },
+          ),
+        )}
+      />
       <input type="hidden" name="stagesJson" value={JSON.stringify(teachStages)} />
       <input type="hidden" name="extractMode" value={extractMode} />
       <input type="hidden" name="outputName" value={resultShape === "list" ? listArrayKey : outputName} />
@@ -478,13 +619,13 @@ export function SiteBrowser({
 
       {pickHint && !pendingPick ? <p className="banner teach-pick-hint">{pickHint}</p> : null}
 
-      {step2FieldMapped && !pendingPick ? (
+      {step2FieldMapped && !session.inPlace && !pendingPick ? (
         <div className="teach-now-banner" role="status">
           <p className="teach-now-banner-kicker">Step 2 complete — your field is saved</p>
           <p className="teach-now-banner-text">
             <strong>Now:</strong> Open the results in a normal browser tab if the preview will not finish the search
             (captcha or bot checks). Paste that results address into the box above, press Go, then click{" "}
-            <strong>“This page shows the answers”</strong> — that starts step 3. Live lookups run as jobs, not in this preview.
+            <strong>“The answers are already here”</strong> — that starts step 3. Live lookups run as jobs, not in this preview.
           </p>
         </div>
       ) : null}
@@ -517,7 +658,11 @@ export function SiteBrowser({
               </button>
             </div>
           </div>
-          <iframe ref={frame} className="browser-frame" title={title} src={mirrorBrowseHref(url)} onLoad={onFrameLoad} />
+          {studioEnabled ? <StudioCamoufox startUrl={url.includes("://") ? url : `https://${url}`} /> : null}
+          <details className="muted" open={!studioEnabled}>
+            <summary>{studioEnabled ? "Legacy iframe preview" : "Browse preview"}</summary>
+            <iframe ref={frame} className="browser-frame" title={title} src={mirrorBrowseHref(url)} onLoad={onFrameLoad} />
+          </details>
         </div>
 
         <aside
@@ -552,7 +697,7 @@ export function SiteBrowser({
                   const bounds = layout.getBoundingClientRect();
                   const left = Math.min(Math.max(0, origin.left + ev.clientX - origin.x), Math.max(0, bounds.width - origin.width));
                   const top = Math.min(Math.max(0, origin.top + ev.clientY - origin.y), Math.max(0, bounds.height - 36));
-                  next = { left, top, width: origin.width, height: origin.height };
+                  next = { ...origin, left, top };
                   dock.style.right = "auto";
                   dock.style.left = `${next.left}px`;
                   dock.style.top = `${next.top}px`;
@@ -589,47 +734,60 @@ export function SiteBrowser({
 
           {canMarkResultHere && !intentPending && !pendingPick ? (
             <section className="teach-intent review-block teach-intent-prominent">
-              <h3>Same page for answers?</h3>
-              <p className="muted">This URL is your starting point. If the API reads this page directly, mark it as the answers page.</p>
+              <h3>How does this page work?</h3>
+              <p className="muted">Choose whether the answers are already visible, or only after you use the form on this same screen.</p>
               <button type="button" className="btn-primary" onClick={() => labelPage("result")}>
-                This page shows the answers
+                The answers are already here
+              </button>
+              <button type="button" onClick={() => setSession((current) => markInPlaceResult(current, currentUrl))}>
+                I fill a form, and the answers stay on this page
               </button>
             </section>
           ) : null}
 
           {intentPending && !pendingPick ? (
             <section className="teach-intent review-block teach-intent-prominent">
-              <h3>Step 1 · What is this page?</h3>
+              <h3>Step 1 · What happens on this page?</h3>
               <p className="muted">
                 {awaitingResultLabel
-                  ? "If this is your search results, choose “This page shows the answers”."
-                  : "Label this page before continuing."}
+                  ? "If you landed on a new page after submitting, choose “The answers are already here.” If the form and the answers are the same screen, choose “I fill a form, and the answers stay on this page.”"
+                  : "Pick the one sentence that matches this screen."}
               </p>
               <div className="teach-intent-actions">
-                <button type="button" onClick={() => labelPage("start")}>Starting point</button>
-                <button type="button" onClick={() => labelPage("action")}>I search or fill a form here</button>
+                <button type="button" onClick={() => labelPage("start")}>First page I open</button>
+                <button type="button" onClick={() => labelPage("action")}>I fill a form, then a new page shows the answers</button>
                 <button type="button" className="btn-primary" onClick={() => labelPage("result")}>
-                  This page shows the answers
+                  The answers are already here
+                </button>
+                <button type="button" onClick={() => setSession((current) => markInPlaceResult(current, currentUrl))}>
+                  I fill a form, and the answers stay on this page
                 </button>
                 <button type="button" className="btn-link" onClick={() => labelPage("skip")}>Skip once</button>
               </div>
             </section>
           ) : null}
 
-          {showFormSection && !intentPending && !pendingPick ? (
+          {showFormSection && !intentPending && !pendingPick && (recipe.length === 0 || recordPhase !== "idle") ? (
             <TeachPageRecorder
               phase={recordPhase}
+              stayOnPage={Boolean(session.inPlace)}
               actions={recordedActions}
               pasteUrl={pasteUrl}
               onPasteUrl={setPasteUrl}
               onStart={() => {
+                recordStartUrl.current = currentUrl;
                 setRecordedActions([]);
                 setRecordPhase("recording");
                 setPickMode({ kind: "record" });
               }}
               onStop={() => {
                 setPickMode({ kind: "idle" });
-                setRecordPhase("paste");
+                const start = recordStartUrl.current || currentUrl;
+                commitRecordedPage(start);
+                if (!pageKeysMatch(start, currentUrl)) {
+                  setSession((s) => applyPageIntent(s, currentUrl, "result"));
+                }
+                setRecordPhase("idle");
               }}
               onContinuePaste={() => setRecordPhase("confirm")}
               onFinalYes={() => {
@@ -649,72 +807,44 @@ export function SiteBrowser({
             />
           ) : null}
 
-          {showFormSection && !intentPending && !pendingPick && formFields.length === 0 && recordPhase === "idle" ? (
-            <TeachStep2Callout
-              fieldCount={formFields.length}
-              pickMode={pickMode}
-              pendingPick={Boolean(pendingPick)}
-              addAnother={addAnother}
-              onAddAnotherChange={setAddAnother}
-              onAddField={() => setPickMode({ kind: "pickFormInput", addAnother })}
-            />
-          ) : null}
-
         {!pendingPick ? (
         <div className="teach-side-body">
         <aside className="teach-panel">
-          {showFormSection && formFields.length > 0 ? (
+          {showFormSection && recipe.length > 0 ? (
             <section className="review-block teach-mapped-fields-compact">
-              <h3>Mapped field{formFields.length === 1 ? "" : "s"}</h3>
-              <TeachFieldList
-                fields={formFields}
+              <h3>What you just did</h3>
+              <p className="muted">These steps run for every API call. Rename a value if callers should use a clearer name.</p>
+              <TeachRecipeList
+                steps={recipe}
                 disabled={picking || Boolean(pendingPick)}
-                emptyMessage="No form fields yet."
-                onRename={(id, key) => setFormFields((p) => p.map((f) => (f.id === id ? { ...f, key } : f)))}
-                onDelete={(id) => setFormFields((p) => p.filter((f) => f.id !== id))}
-                onRepick={(id) => setPickMode({ kind: "pickReplaceFormField", fieldId: id })}
-                onReorder={(from, to) => {
-                  setFormFields((p) => {
-                    const next = [...p];
-                    const [item] = next.splice(from, 1);
-                    next.splice(to, 0, item);
-                    return next;
-                  });
+                replaying={replaying}
+                onRename={(id, value) =>
+                  setRecipe((prev) => prev.map((step) => (step.id === id ? { ...step, key: value } : step)))
+                }
+                onDelete={(id) => setRecipe((prev) => prev.filter((step) => step.id !== id))}
+                onReplay={() => {
+                  void replayRecipe();
                 }}
               />
-              {!onActionPage ? (
+              {replayError ? <p className="banner">{replayError}</p> : null}
+              {!onActionPage && !inPlaceHere ? (
                 <p className="banner teach-page-hint">
                   Open your search/form page in the website to add or verify fields.
                 </p>
               ) : null}
-              <button
-                type="button"
-                className="btn-link teach-add-another-link"
-                disabled={picking || Boolean(pendingPick)}
-                onClick={() => setPickMode({ kind: "pickFormInput", addAnother })}
-              >
-                + Map another form field
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                disabled={picking || Boolean(pendingPick) || !onActionPage}
-                onClick={() => setPickMode({ kind: "pickSubmit" })}
-              >
-                Pick submit control
-              </button>
-              {submitSelector ? <p className="muted">Submit: {submitSelector}</p> : null}
             </section>
           ) : null}
 
-          {onResultPage ? (
+          {onResultPage && (!inPlaceHere || recipe.length > 0) ? (
             <>
               <section className="review-block teach-step3-intro">
-                <h3>{saved ? "Saved response" : "Step 3 · Build your API response"}</h3>
+                <h3>{saved ? "Saved response" : inPlaceHere ? "Click the answers" : "Step 3 · Build your API response"}</h3>
                 <p className="muted">
                   {saved
                     ? "These are the fields already published. Rename a key, drag to reorder, delete one, or click the page to add another. Publish again to save."
-                    : "Choose what shape the JSON takes, then click parts of the results page. Watch the preview update on the right."}
+                    : inPlaceHere
+                      ? "Click one generated username, then click each value you want the API to return."
+                      : "Choose what shape the JSON takes, then click parts of the results page. Watch the preview update on the right."}
                 </p>
                 <p className="teach-step3-type-label">Response shape</p>
                 <div className="teach-shape-cards" role="radiogroup" aria-label="API return type">
@@ -932,7 +1062,7 @@ export function SiteBrowser({
                       }
                       width = Math.min(width, Math.max(minW, bounds.width - left));
                       height = Math.min(height, Math.max(minH, bounds.height - top));
-                      next = { left, top, width, height };
+                      next = { ...origin, left, top, width, height };
                       dock.style.right = "auto";
                       dock.style.left = `${left}px`;
                       dock.style.top = `${top}px`;

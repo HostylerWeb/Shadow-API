@@ -94,6 +94,13 @@ async function finishCarrierRun(
   }
   if (run.failureCode === "GRAPH_STEP_FAILED") {
     await recordGraphRepair(db, row, run.graphVersion);
+    const failKey = `connector:failures:${row.connectorId}`;
+    const count = await redis.incr(failKey);
+    await redis.expire(failKey, 3600);
+    const threshold = Number(process.env.CONNECTOR_QUARANTINE_THRESHOLD ?? "20");
+    if (count >= threshold) {
+      await redis.set(`connector:quarantine:${row.connectorId}`, "1", "EX", 3600);
+    }
   }
 }
 
@@ -166,6 +173,22 @@ export async function processQueuedJob(
     throw new TenantBusyError();
   }
   console.log(`[worker] start job_id=${jobId}`);
+
+  const quarantined = await redis.get(`connector:quarantine:${row.connectorId}`);
+  if (quarantined === "1") {
+    assertTransition("queued", "failed");
+    await db
+      .update(jobs)
+      .set({
+        status: "failed",
+        failureCode: "GRAPH_STEP_FAILED",
+        failureMessage: "Connector is temporarily quarantined after repeated graph failures",
+        updatedAt: new Date(),
+        completedAt: new Date(),
+      })
+      .where(eq(jobs.id, jobId));
+    return;
+  }
 
   assertTransition("queued", "running");
   await db.update(jobs).set({ status: "running", updatedAt: new Date() }).where(eq(jobs.id, jobId));

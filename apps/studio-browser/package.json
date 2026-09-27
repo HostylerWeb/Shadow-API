@@ -1,0 +1,27 @@
+{
+  "name": "@shadowapi/studio-browser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@shadowapi/core": "workspace:*",
+    "@shadowapi/db": "workspace:*",
+    "camoufox-js": "^0.12.0",
+    "fastify": "latest",
+    "@fastify/websocket": "latest",
+    "playwright-core": "1.60.0"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/ws": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

@@ -1,4 +1,6 @@
-/** Rewrite third-party asset URLs so iframe loads go through /api/browse (same origin). */
+import { mirrorBrowseHref } from "./browse-mirror";
+
+/** Rewrite third-party asset URLs so iframe loads go through the portal mirror (same origin). */
 
 export function isApiLikeBrowsePath(target: URL): boolean {
   const path = target.pathname;
@@ -46,6 +48,15 @@ export function normalizeTeachApiBrowseResponse(
 
 export function siteRegistrableHost(hostname: string): string {
   return String(hostname || "").toLowerCase().replace(/^www\./, "");
+}
+
+/** Same site, including a subdomain of a host the author already opened. */
+export function sameTeachSiteHost(allowedHost: string, requestHost: string): boolean {
+  const a = siteRegistrableHost(allowedHost);
+  const b = siteRegistrableHost(requestHost);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return b.endsWith(`.${a}`) || a.endsWith(`.${b}`);
 }
 
 /** Same registrable site as teach mirror (e.g. www.royalmail.com ↔ api-web.royalmail.com). */
@@ -251,10 +262,35 @@ export function rewriteUrl(raw: string, base: URL, portalOrigin?: string): strin
     if (/^(fonts\.gstatic\.com|fonts\.googleapis\.com|applepay\.cdn-apple\.com|widget\.trustpilot\.com)$/i.test(host)) {
       return absolute;
     }
-    return proxyHref(absolute, portalOrigin);
+    return mirrorBrowseHref(absolute, portalOrigin);
   } catch {
     return null;
   }
+}
+
+/**
+ * Vite/SPA chunks use relative `from "./chunk.js"`. Resolved against a mirrored script URL
+ * (`/build/assets/a.js?u=siteRoot`), the browser drops `?u=` for sibling imports — teach browse
+ * then 401s. Rewrite specifiers to absolute mirrored URLs that keep the site root param.
+ */
+export function rewriteEsmImports(source: string, moduleUrl: URL, portalOrigin?: string): string {
+  const mirrorRelative = (spec: string): string => {
+    const trimmed = spec.trim();
+    if (!trimmed.startsWith(".")) return spec;
+    try {
+      const abs = new URL(trimmed, moduleUrl).toString();
+      return mirrorBrowseHref(abs, portalOrigin);
+    } catch {
+      return spec;
+    }
+  };
+
+  let out = source.replace(/from["'](\.\.?\/[^"']+)["']/g, (_m, spec: string) => `from"${mirrorRelative(spec)}"`);
+  out = out.replace(/\bimport\s*\(\s*["'](\.\.?\/[^"']+)["']\s*\)/g, (_m, spec: string) =>
+    `import("${mirrorRelative(spec)}")`,
+  );
+  out = out.replace(/\bimport["'](\.\.?\/[^"']+)["']/g, (_m, spec: string) => `import"${mirrorRelative(spec)}"`);
+  return out;
 }
 
 function rewriteCssUrlsInText(css: string, base: URL, portalOrigin?: string): string {
@@ -336,7 +372,7 @@ export function rewriteConsentVendorRootPaths(html: string, page: URL, portalOri
   const vendorOrigin = page.origin;
   const toProxy = (rootPath: string) => {
     const absolute = new URL(rootPath, vendorOrigin).toString();
-    return proxyHref(absolute, portalOrigin);
+    return mirrorBrowseHref(absolute, portalOrigin);
   };
   return html.replace(/(["'])\/(asset\/[^"']+)\1/gi, (_m, quote: string, path: string) => {
     return `${quote}${toProxy(`/${path}`)}${quote}`;

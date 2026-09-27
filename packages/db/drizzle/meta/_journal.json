@@ -57,6 +57,13 @@
       "when": 1790357000000,
       "tag": "0007_api_key_secret",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790360000000,
+      "tag": "0008_portal_auth",
+      "breakpoints": true
     }
   ]
 }

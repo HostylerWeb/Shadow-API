@@ -2,7 +2,7 @@ import { detectNavigationPattern, type NavigationPattern } from "../navigation-p
 import type { MarkedExtract, MarkedListExtract, PageIntent } from "./protocol";
 import { normalizePageKey } from "./protocol";
 import { sampleHasValues } from "./mapping";
-import { compositeReady, extractHasNonEmptyOutput, isCompositeExtract, normalizeToComposite } from "@shadowapi/teach-extract";
+import { compositeReady, extractHasNonEmptyOutput, isCompositeExtract } from "@shadowapi/teach-extract";
 
 export type TeachSessionState = {
   pagesByKey: Record<string, PageIntent>;
@@ -16,6 +16,8 @@ export type TeachSessionState = {
   /** Set by UI when preview has loaded rows or composite object */
   previewRows?: Record<string, string>[];
   previewPayload?: Record<string, unknown>;
+  /** Same document is both the form and the answers. Interactions must still run. */
+  inPlace?: boolean;
 };
 
 export function emptyTeachSession(initialUrl: string): TeachSessionState {
@@ -82,9 +84,21 @@ export function hasResultPage(state: TeachSessionState): boolean {
   return Boolean(state.resultUrl);
 }
 
-export function isReadOnlyWorkflow(state: TeachSessionState): boolean {
+export function markInPlaceResult(state: TeachSessionState, url: string): TeachSessionState {
+  const withAction = state.actionUrl ? state : applyPageIntent(state, url, "action");
+  const withResult = applyPageIntent(withAction, url, "result");
+  return { ...withResult, inPlace: true, pattern: "P1" };
+}
+
+export function isReadOnlyWorkflow(
+  state: TeachSessionState,
+  interactions?: { fieldCount?: number; clickCount?: number },
+): boolean {
   if (!state.resultUrl) return false;
-  return normalizePageKey(state.startUrl) === normalizePageKey(state.resultUrl);
+  if (normalizePageKey(state.startUrl) !== normalizePageKey(state.resultUrl)) return false;
+  if (state.inPlace) return false;
+  if ((interactions?.fieldCount ?? 0) > 0 || (interactions?.clickCount ?? 0) > 0) return false;
+  return true;
 }
 
 export function lookupKind(state: TeachSessionState): "read" | "lookup" {

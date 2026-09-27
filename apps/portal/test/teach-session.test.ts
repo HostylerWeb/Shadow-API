@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPageIntent, canPublish, emptyTeachSession, guessTemplatingSample, isReadOnlyWorkflow, pendingIntentUrl } from "../src/teach/session.js";
+import { applyPageIntent, canPublish, emptyTeachSession, guessTemplatingSample, isReadOnlyWorkflow, markInPlaceResult, pendingIntentUrl } from "../src/teach/session.js";
 
 test("pendingIntentUrl blocks until labeled", () => {
   const state = applyPageIntent(
@@ -30,6 +30,12 @@ test("isReadOnlyWorkflow is false until result URL is set", () => {
     "result",
   );
   assert.equal(isReadOnlyWorkflow(read), true);
+  assert.equal(isReadOnlyWorkflow(read, { fieldCount: 2 }), false);
+  assert.equal(isReadOnlyWorkflow(read, { clickCount: 1 }), false);
+  const inPlace = markInPlaceResult(startOnly, "https://example.com/");
+  assert.equal(inPlace.inPlace, true);
+  assert.equal(isReadOnlyWorkflow(inPlace), false);
+  assert.equal(inPlace.resultUrl, "https://example.com/");
 });
 
 test("canPublish requires non-empty preview for marked_list", () => {

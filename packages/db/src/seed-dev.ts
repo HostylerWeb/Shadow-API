@@ -2,7 +2,7 @@ import { createHash, randomBytes, scryptSync } from "node:crypto";
 import { createDb } from "./client.js";
 import { apiKeys, portalUsers, tenants } from "./schema.js";
 
-const url = process.env.DATABASE_URL ?? "postgres://shadowapi:shadowapi@localhost:5433/shadowapi";
+const url = process.env.DATABASE_URL ?? "postgres://shadowapi:shadowapi@localhost:5436/shadowapi";
 
 function hashKey(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");

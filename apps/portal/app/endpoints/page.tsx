@@ -4,7 +4,7 @@ import { listUserEndpoints } from "../../src/accounts";
 import { liveRunsThisMonth } from "../../src/dashboard";
 import { liveCap } from "@shadowapi/core";
 import { tenants } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 import { deleteEndpointAction, renameEndpointAction, requireSession, setEndpointLimitAction } from "../actions";
 import { EndpointCopy } from "./endpoint-copy";
 

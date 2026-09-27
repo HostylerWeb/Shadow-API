@@ -21,7 +21,9 @@ export type UseTeachPickerOptions = {
   rowSelector: string;
   onPick: (payload: PickPayload) => void;
   onNavigate?: (url: string) => void;
-  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string }) => void;
+  /** Query-only updates while recording should not cancel the recipe. */
+  shouldIgnoreNavigate?: (url: string) => boolean;
+  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string; control?: "text" | "select" | "checkbox" | "click"; keyHint?: string }) => void;
   pickMode: PickMode;
   setPickMode: (mode: PickMode) => void;
 };
@@ -33,6 +35,10 @@ export function useTeachPicker(options: UseTeachPickerOptions) {
   useEffect(() => {
     const detach = attachFrameBridge({
       onNavigate: (navUrl) => {
+        if (optionsRef.current.shouldIgnoreNavigate?.(navUrl)) {
+          optionsRef.current.onNavigate?.(navUrl);
+          return;
+        }
         optionsRef.current.onNavigate?.(navUrl);
         optionsRef.current.setPickMode({ kind: "idle" });
         setTeachMode(optionsRef.current.frame.current, "off");

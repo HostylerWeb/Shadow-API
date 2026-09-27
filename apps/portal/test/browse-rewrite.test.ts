@@ -5,6 +5,7 @@ import {
   readDocumentBase,
   rootFallbackAssetUrl,
   rewriteCss,
+  rewriteEsmImports,
   rewriteHtml,
   rewriteUrl,
   shouldPassThroughBrowseBody,
@@ -13,6 +14,7 @@ import {
   isTeachCmpTelemetryPath,
   teachStubUnauthorizedBody,
   upstreamBrowseRequestHeaders,
+  sameTeachSiteHost,
   teachCmpTelemetryStub,
 } from "../src/browse/rewrite.js";
 import {
@@ -23,12 +25,19 @@ import {
 } from "../src/browse/browse-cookie-jar.js";
 
 describe("browse rewrite", () => {
+  it("treats a subdomain as the same site the author opened", () => {
+    assert.equal(sameTeachSiteHost("goldprice.org", "data-asg.goldprice.org"), true);
+    assert.equal(sameTeachSiteHost("www.example.com", "api.example.com"), true);
+    assert.equal(sameTeachSiteHost("example.com", "example.org"), false);
+    assert.equal(sameTeachSiteHost("example.com", "notexample.com"), false);
+  });
+
   it("rewrites root-relative url() in CSS against the real stylesheet URL", () => {
     const sheet = new URL("https://cdn.example.com/stylesheets/site.css");
     const css = `.btn { background: url(/images/search/search-button.png); }`;
     const out = rewriteCss(css, sheet);
-    assert.match(out, /\/api\/browse\?u=/);
-    assert.ok(out.includes(encodeURIComponent("https://cdn.example.com/images/search/search-button.png")));
+    assert.match(out, /\/images\/search\/search-button\.png\?u=/);
+    assert.ok(out.includes(encodeURIComponent("https://cdn.example.com/")));
   });
 
   it("rewrites script src in HTML", () => {
@@ -44,7 +53,7 @@ describe("browse rewrite", () => {
     const page = new URL("https://7daysperformance.co.uk/");
     const html = `<html><head><base href="/"><script src="/config/env.js"></script></head></html>`;
     const out = rewriteHtml(html, page, "", portal);
-    assert.match(out, /src="http:\/\/localhost:3001\/api\/browse\?u=/);
+    assert.match(out, /src="http:\/\/localhost:3001\/config\/env\.js\?u=/);
     assert.match(out, /href="https:\/\/7daysperformance\.co\.uk\/"/);
   });
 
@@ -57,7 +66,7 @@ describe("browse rewrite", () => {
   it("rewriteUrl resolves relative paths from page", () => {
     const page = new URL("https://example.com/path/page.html");
     const proxied = rewriteUrl("../assets/x.woff2", page);
-    assert.ok(proxied?.includes(encodeURIComponent("https://example.com/assets/x.woff2")));
+    assert.match(proxied ?? "", /\/assets\/x\.woff2\?u=/);
   });
 
   it("detects API JSON bodies that should not be rewritten as HTML", () => {
@@ -71,7 +80,7 @@ describe("browse rewrite", () => {
     const page = new URL("https://7daysperformance.co.uk/product/win-this-car");
     const html = `<html><head><base href="/"><script src="main.abc.js" type="module"></script></head></html>`;
     const out = rewriteHtml(html, page, "", portal);
-    assert.match(out, /7daysperformance\.co\.uk%2Fmain\.abc\.js/);
+    assert.match(out, /\/main\.abc\.js\?u=.*7daysperformance\.co\.uk/);
     assert.doesNotMatch(out, /product%2Fmain/);
   });
 
@@ -92,7 +101,7 @@ describe("browse rewrite", () => {
     const page = new URL("https://7daysperformance.co.uk/");
     const html = `<html><head><base href="/"><style>@font-face{font-family:R;src:url(/assets/fonts/a.woff2)}</style></head></html>`;
     const out = rewriteHtml(html, page, "", portal);
-    assert.match(out, /api\/browse\?u=.*assets%2Ffonts%2Fa\.woff2/);
+    assert.match(out, /\/assets\/fonts\/a\.woff2\?u=/);
     assert.doesNotMatch(out, /url\(\/assets\/fonts/);
   });
 
@@ -116,7 +125,7 @@ describe("browse rewrite", () => {
     const html = `<iframe src="https://consent.trustarc.com/notice?domain=royalmail.com&amp;c=teconsent"></iframe>`;
     const out = rewriteHtml(html, page, "", "http://localhost:3001");
     assert.doesNotMatch(out, /&amp;c=/);
-    assert.match(out, /consent\.trustarc\.com%2Fnotice%3Fdomain%3Droyalmail\.com%26c%3Dteconsent/);
+    assert.match(out, /\/notice\?domain=royalmail\.com&c=teconsent&u=.*consent\.trustarc\.com/);
   });
 
   it("recognizes TrustArc CMP telemetry paths for teach stubs", () => {
@@ -131,8 +140,8 @@ describe("browse rewrite", () => {
     const page = new URL("https://consent.trustarc.com/notice?domain=royalmail.com");
     const html = `<script src="/asset/notice.js/v/1"></script><a href="/analytics?action=0">x</a>`;
     const out = rewriteHtml(html, page, "", "http://localhost:3001");
-    assert.match(out, /api\/browse\?u=.*consent\.trustarc\.com%2Fasset%2Fnotice\.js/);
-    assert.match(out, /api\/browse\?u=.*consent\.trustarc\.com%2Fanalytics/);
+    assert.match(out, /\/asset\/notice\.js\/v\/1\?u=.*consent\.trustarc\.com/);
+    assert.match(out, /\/analytics\?action=0&u=.*consent\.trustarc\.com/);
     assert.doesNotMatch(out, /src="\/asset\//);
   });
 
@@ -183,6 +192,15 @@ describe("browse rewrite", () => {
     } as Response);
     assert.equal(readBrowseCookieHeader(key), "wcid=abc; lagrange_session=s1");
     clearBrowseCookieJars();
+  });
+
+  it("rewrites relative ESM imports to mirrored URLs that keep the teach site root", () => {
+    const portal = "http://localhost:3001";
+    const moduleUrl = new URL("https://generate-random.org/build/assets/InputGroup-CZqrqA1m.js");
+    const js = `import{x}from"./vue-vendor-CP1n52P_.js";`;
+    const out = rewriteEsmImports(js, moduleUrl, portal);
+    assert.match(out, /from"http:\/\/localhost:3001\/build\/assets\/vue-vendor-CP1n52P_\.js\?u=/);
+    assert.doesNotMatch(out, /from"\.\//);
   });
 
   it("stubs plain unauthorized access bodies for teach preview", () => {

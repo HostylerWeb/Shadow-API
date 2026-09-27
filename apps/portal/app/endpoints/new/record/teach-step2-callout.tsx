@@ -39,25 +39,24 @@ export function TeachStep2Callout({
   }
 
   return (
-    <div className="teach-step-callout">
-      <p className="teach-step-callout-label">Step 2 — map a form field</p>
-
+    <details className="teach-step-callout">
+      <summary>Or pick one control at a time</summary>
       {picking ? (
         <p className="teach-step-callout-active">
-          <strong>Now click</strong> the search box in the embedded website.
+          <strong>Now click</strong> that control in the website.
         </p>
       ) : (
         <>
-          <button type="button" className="btn-primary teach-step-callout-btn" disabled={disabled} onClick={onAddField}>
-            Add form field from page
+          <p className="muted teach-step-callout-hint">Use this only if recording missed a field. Click the button, then click one control in the website.</p>
+          <button type="button" className="btn-ghost teach-step-callout-btn" disabled={disabled} onClick={onAddField}>
+            Pick one control
           </button>
-          <p className="muted teach-step-callout-hint">Then click the search input once in the website.</p>
           <label className="choice teach-step-callout-choice">
             <input type="checkbox" checked={addAnother} onChange={(e) => onAddAnotherChange(e.target.checked)} />
-            Add another field after each click
+            Keep picking after each click
           </label>
         </>
       )}
-    </div>
+    </details>
   );
 }

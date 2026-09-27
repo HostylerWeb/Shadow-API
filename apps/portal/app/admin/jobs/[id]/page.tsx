@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createDb } from "@shadowapi/db";
 import { jobs } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 import { requireAdmin } from "../../../../src/admin";
 import { adminCancelJobAction, requireSession } from "../../../actions";
 

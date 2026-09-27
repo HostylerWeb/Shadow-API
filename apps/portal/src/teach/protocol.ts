@@ -1,5 +1,7 @@
 export type PageIntent = "start" | "action" | "result" | "skip";
 
+export type TeachControl = "text" | "select" | "checkbox" | "click";
+
 export type MarkedField = { key: string; selector: string };
 
 /** UI state for one mapped column; stripped to MarkedField on publish */
@@ -9,6 +11,7 @@ export type TeachField = {
   selector: string;
   sampleText?: string;
   elementTag?: string;
+  control?: TeachControl;
 };
 
 export type PickElementMeta = {
@@ -17,6 +20,7 @@ export type PickElementMeta = {
   textLength: number;
   inputCount: number;
   matchingRows: number;
+  control?: TeachControl | "element";
 };
 
 export type PickPayload = {
@@ -94,7 +98,8 @@ export type ShadowFromFrame =
   | ShadowSampleSingleMessage
   | ShadowRowCountMessage
   | ShadowSampleObjectMessage
-  | ShadowRecordedMessage;
+  | ShadowRecordedMessage
+  | ShadowReplayResultMessage;
 
 export type ShadowRecordedMessage = {
   type: "shadow:teach:recorded";
@@ -102,6 +107,25 @@ export type ShadowRecordedMessage = {
   selector: string;
   value: string;
   text: string;
+  control?: TeachControl;
+  keyHint?: string;
+};
+
+export type TeachReplayStep =
+  | { kind: "text" | "select" | "checkbox"; selector: string; value: string }
+  | { kind: "click"; selector: string };
+
+export type ShadowReplayCommand = {
+  type: "shadow:teach:replay";
+  requestId: string;
+  steps: TeachReplayStep[];
+};
+
+export type ShadowReplayResultMessage = {
+  type: "shadow:teach:replayResult";
+  requestId: string;
+  ok: boolean;
+  error?: string;
 };
 
 export type ShadowTeachModeCommand = {
@@ -135,7 +159,8 @@ export type ShadowToFrame =
   | ShadowSampleCommand
   | ShadowRowCountCommand
   | ShadowPortalOriginCommand
-  | ShadowHighlightCommand;
+  | ShadowHighlightCommand
+  | ShadowReplayCommand;
 
 export function isShadowFromFrame(data: unknown): data is ShadowFromFrame {
   if (!data || typeof data !== "object") return false;
@@ -147,7 +172,8 @@ export function isShadowFromFrame(data: unknown): data is ShadowFromFrame {
     type === "shadow:teach:sampleSingle" ||
     type === "shadow:teach:rowCount" ||
     type === "shadow:teach:sampleObject" ||
-    type === "shadow:teach:recorded"
+    type === "shadow:teach:recorded" ||
+    type === "shadow:teach:replayResult"
   );
 }
 

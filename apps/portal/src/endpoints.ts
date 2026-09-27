@@ -1,6 +1,6 @@
 import type { Db } from "@shadowapi/db";
 import { connectorVersions } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 
 export function endpointTitle(connectorId: string, title?: string): string {
   if (title) return title;

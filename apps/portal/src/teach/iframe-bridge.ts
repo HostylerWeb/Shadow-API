@@ -1,4 +1,4 @@
-import type { MarkedExtract, PickPayload, ShadowFromFrame, ShadowToFrame, TeachField } from "./protocol";
+import type { MarkedExtract, PickPayload, ShadowFromFrame, ShadowToFrame, TeachField, TeachReplayStep } from "./protocol";
 import { isShadowFromFrame } from "./protocol";
 
 export type FrameBridgeHandlers = {
@@ -7,7 +7,7 @@ export type FrameBridgeHandlers = {
   onSampleResult: (requestId: string, results: Record<string, string>[] | null, error?: string) => void;
   onSampleSingle: (requestId: string, value: string | null, error?: string) => void;
   onRowCount?: (requestId: string, count: number, error?: string) => void;
-  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string }) => void;
+  onRecorded?: (action: { action: "fill" | "click"; selector: string; value: string; text: string; control?: "text" | "select" | "checkbox" | "click"; keyHint?: string }) => void;
 };
 
 export function attachFrameBridge(handlers: FrameBridgeHandlers): () => void {
@@ -33,7 +33,14 @@ export function attachFrameBridge(handlers: FrameBridgeHandlers): () => void {
     } else if (data.type === "shadow:teach:rowCount") {
       handlers.onRowCount?.(data.requestId, data.count, data.error);
     } else if (data.type === "shadow:teach:recorded") {
-      handlers.onRecorded?.({ action: data.action, selector: data.selector, value: data.value, text: data.text });
+      handlers.onRecorded?.({
+        action: data.action,
+        selector: data.selector,
+        value: data.value,
+        text: data.text,
+        control: data.control,
+        keyHint: data.keyHint,
+      });
     }
   }
 
@@ -127,6 +134,37 @@ export function requestRowCount(frame: HTMLIFrameElement | null, rowSelector: st
 
     window.addEventListener("message", onMessage);
     postToFrame(frame, { type: "shadow:teach:rowCount", requestId, row_selector: rowSelector });
+  });
+}
+
+let replayCounter = 0;
+
+export function requestReplay(frame: HTMLIFrameElement | null, steps: TeachReplayStep[]): Promise<void> {
+  const requestId = `replay-${Date.now()}-${replayCounter++}`;
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Replay timed out"));
+    }, 8000);
+
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as ShadowFromFrame;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "shadow:teach:replayResult" && data.requestId === requestId) {
+        cleanup();
+        if (!data.ok) reject(new Error(data.error || "Replay failed"));
+        else resolve();
+      }
+    }
+
+    function cleanup() {
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+    }
+
+    window.addEventListener("message", onMessage);
+    postToFrame(frame, { type: "shadow:teach:replay", requestId, steps });
   });
 }
 

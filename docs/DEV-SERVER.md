@@ -20,6 +20,9 @@ In separate terminals (each: `set -a && source .env && set +a`):
 | `pnpm dev:gateways` | 3000 + 3010, nginx http://localhost:3080 |
 | `pnpm dev:worker` | BullMQ consumer |
 | `pnpm --filter @shadowapi/portal dev` | http://localhost:3001 |
+| `pnpm dev:studio-browser` | http://localhost:3020 (embedded Camoufox; set `STUDIO_BROWSER_*` in `.env`) |
+
+Optional: `pnpm db:seed-portal` with `PORTAL_ADMIN_EMAIL` / `PORTAL_CUSTOMER_EMAIL` env vars.
 
 Live `carrier_x_pod` needs `STAGING_ORIGIN` (worker sets this when tests run; for manual jobs start worker after infra is up). Camoufox binary: see [CAMOUFOX.md](./CAMOUFOX.md).
 

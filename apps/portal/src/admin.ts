@@ -1,8 +1,8 @@
-import { and, count, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, sql } from "@shadowapi/db";
 import type { Redis } from "ioredis";
 import type { Db } from "@shadowapi/db";
 import { connectorVersions, graphRepairs, jobs, portalUsers, tenants, usageEvents } from "@shadowapi/db/schema";
-import { loadPortalUser } from "./accounts.js";
+import { loadPortalUser } from "./accounts";
 
 export const PAGE_SIZE = 20;
 

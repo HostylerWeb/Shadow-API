@@ -48,6 +48,7 @@ export type CustomManifest = {
   form_fields?: Array<{ key: string; selector: string }>;
   submit_selector?: string;
   requires_session?: boolean;
+  max_results?: number;
 };
 
 const GRAPH_VERSION = "v1.0.0-g1";
@@ -163,12 +164,33 @@ export async function extractMarkedList(
         }
         return ownText;
       }
-      const rows = Array.from(document.querySelectorAll(rowSel)).slice(0, 50);
+      function queryAllDeep(selector: string, root: ParentNode = document): Element[] {
+        try {
+          const direct = Array.from(root.querySelectorAll(selector));
+          if (direct.length) return direct;
+        } catch { /* fall through to open shadow roots */ }
+        const last = selector.trim().split(/\s+/).pop() || selector;
+        const matched: Element[] = [];
+        const pending: ParentNode[] = [root];
+        while (pending.length) {
+          const current = pending.pop();
+          if (!current) break;
+          for (const node of Array.from(current.querySelectorAll("*"))) {
+            const host = node as Element & { shadowRoot?: ShadowRoot | null };
+            if (host.shadowRoot) pending.push(host.shadowRoot);
+            try {
+              if (node.matches(selector) || (last !== selector && node.matches(last))) matched.push(node);
+            } catch { /* ignore a bad fragment */ }
+          }
+        }
+        return matched;
+      }
+      const rows = queryAllDeep(rowSel).slice(0, 50);
       const out: Record<string, string>[] = [];
       for (const row of rows) {
         const item: Record<string, string> = {};
         for (const field of fields) {
-          const el = row.querySelector(field.selector);
+          const el = !field.selector || field.selector === ":scope" ? row : queryAllDeep(field.selector, row)[0] ?? null;
           item[field.key] = el ? readPicked(el) : "";
         }
         if (Object.values(item).some((value) => value.length > 0)) out.push(item);
@@ -187,7 +209,27 @@ export async function extractMarkedSingle(page: Page, selector: string, trace?: 
   const sel = sanitizeSelector(selector);
   if (selector !== sel) trace?.push(`sanitize single selector: ${JSON.stringify(selector)} → ${JSON.stringify(sel)}`);
   const value = await page.evaluate((s) => {
-    const el = document.querySelector(s);
+    function queryDeep(selector: string): Element | null {
+      try {
+        const direct = document.querySelector(selector);
+        if (direct) return direct;
+      } catch { /* fall through */ }
+      const last = selector.trim().split(/\s+/).pop() || selector;
+      const pending: ParentNode[] = [document];
+      while (pending.length) {
+        const current = pending.pop();
+        if (!current) break;
+        for (const node of Array.from(current.querySelectorAll("*"))) {
+          const host = node as Element & { shadowRoot?: ShadowRoot | null };
+          if (host.shadowRoot) pending.push(host.shadowRoot);
+          try {
+            if (node.matches(selector) || (last !== selector && node.matches(last))) return node;
+          } catch { /* ignore */ }
+        }
+      }
+      return null;
+    }
+    const el = queryDeep(s);
     if (!el) return "";
     const ownText = (el.textContent ?? "").replace(/\s+/g, " ").trim();
     const img = el.tagName === "IMG" ? (el as HTMLImageElement) : !ownText ? el.querySelector("img") : null;
@@ -250,7 +292,27 @@ export async function extractMarkedPage(
   const out = await page.evaluate((fieldSpecs) => {
     const result: Record<string, string> = {};
     for (const field of fieldSpecs) {
-      const el = document.querySelector(field.selector);
+      function queryDeep(selector: string): Element | null {
+        try {
+          const direct = document.querySelector(selector);
+          if (direct) return direct;
+        } catch { /* fall through */ }
+        const last = selector.trim().split(/\s+/).pop() || selector;
+        const pending: ParentNode[] = [document];
+        while (pending.length) {
+          const current = pending.pop();
+          if (!current) break;
+          for (const node of Array.from(current.querySelectorAll("*"))) {
+            const host = node as Element & { shadowRoot?: ShadowRoot | null };
+            if (host.shadowRoot) pending.push(host.shadowRoot);
+            try {
+              if (node.matches(selector) || (last !== selector && node.matches(last))) return node;
+            } catch { /* ignore */ }
+          }
+        }
+        return null;
+      }
+      const el = queryDeep(field.selector);
       if (!el) {
         result[field.key] = "";
         continue;
@@ -287,6 +349,19 @@ function resolveGraphUrl(template: string, inputs: Record<string, string>): stri
     url = url.split(`{${key}}`).join(encodeURIComponent(value));
   }
   return url;
+}
+
+/** Omitted job inputs keep the value recorded while teaching, including in result URLs. */
+function inputsWithSamples(graph: GraphDocument, inputs: Record<string, string>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const step of graph.steps) {
+    if (step.type !== "fill" && step.type !== "select" && step.type !== "check") continue;
+    if (step.sample) merged[step.field] = step.sample;
+  }
+  for (const [key, value] of Object.entries(inputs)) {
+    if (value !== "") merged[key] = value;
+  }
+  return merged;
 }
 
 export async function runLiveCustom(options: {
@@ -332,7 +407,7 @@ export async function runLiveCustom(options: {
           graph,
           inputs,
           pattern: manifest.pattern ?? "P2",
-          resolveUrl: (template) => resolveGraphUrl(template, inputs),
+          resolveUrl: (template) => resolveGraphUrl(template, inputsWithSamples(graph, inputs)),
           trace,
           timeoutMs,
         });

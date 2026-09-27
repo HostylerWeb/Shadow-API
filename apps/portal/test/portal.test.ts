@@ -5,7 +5,7 @@ import { createDb } from "@shadowapi/db";
 import { buildGatewayApp } from "../../gateway/src/app.ts";
 import { createApiKey, quickstartText, signUp, publishUserEndpoint, approveRepair } from "../src/accounts.ts";
 import { connectorVersions, graphRepairs, jobs, portalUsers } from "@shadowapi/db/schema";
-import { eq } from "drizzle-orm";
+import { eq } from "@shadowapi/db";
 import { listTenantJobs } from "../src/dashboard.ts";
 import { adminTenants, requireAdmin } from "../src/admin.ts";
 

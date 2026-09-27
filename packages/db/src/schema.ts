@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -131,9 +132,24 @@ export const portalUsers = pgTable(
     role: text("role").notNull().default("catalog"),
     authorUntil: timestamp("author_until", { withTimezone: true }),
     dashboardKey: text("dashboard_key"),
+    emailVerified: boolean("email_verified").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("portal_users_email_idx").on(t.email)],
+);
+
+export const portalPasswordResets = pgTable(
+  "portal_password_resets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => portalUsers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("portal_password_resets_token_hash_idx").on(t.tokenHash)],
 );
 
 export const usageEvents = pgTable(

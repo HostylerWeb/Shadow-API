@@ -11,13 +11,14 @@ This document summarizes problems we hit when proxying **single-page apps (SPAs)
 | Shape | Example | Purpose |
 |--------|---------|---------|
 | **Document mirror** | `http://localhost:3001/?u=https%3A%2F%2F7daysperformance.co.uk%2F` | Iframe **document** URL: browser `pathname` matches the site (`/` for homepage) so Angular/React routers resolve the right route. |
-| **Asset proxy** | `http://localhost:3001/api/browse?u=https%3A%2F%2F…%2Fmain.xxx.js` | Scripts, styles, fonts, and XHR/fetch: full upstream URL in `u`, served through the browse route without changing the iframe’s pathname. |
+| **Asset mirror** | `http://localhost:3001/build/assets/main.xxx.js?u=https%3A%2F%2Fsite%2F` | Scripts, styles, fonts: same **pathname** as the real site, with site root in `u`. Middleware rewrites to `/api/browse?u=<full upstream URL>`. |
+| **Asset proxy (direct)** | `http://localhost:3001/api/browse?u=https%3A%2F%2F…%2Fmain.xxx.js` | Still valid for fetch/XHR and some subresources; HTML rewrite usually emits **mirror** URLs (see §7, §11). |
 
 Middleware rewrites mirror requests internally to `/api/browse?u=<resolved-upstream-url>`. The browse route (`apps/portal/app/api/browse/route.ts`) fetches upstream, rewrites HTML/CSS when needed, and injects the proxy client + teach scripts.
 
 Key modules:
 
-- `apps/portal/src/browse/rewrite.ts` — HTML/CSS URL rewriting, API JSON pass-through, SPA static fallbacks
+- `apps/portal/src/browse/rewrite.ts` — HTML/CSS URL rewriting, **ESM import rewriting**, API JSON pass-through, SPA static fallbacks
 - `apps/portal/src/browse/proxy-client-script.ts` — In-frame history, fetch/XHR, link/form proxying
 - `apps/portal/src/browse/browse-mirror.ts` — Mirror URL helpers and upstream resolution from path + `u`
 - `apps/portal/middleware.ts` — Rewrite mirror paths to `/api/browse`
@@ -124,13 +125,48 @@ Implemented in `browse-mirror.ts` and wired in `app/api/browse/route.ts`.
 **Fix:** Use **two policies**:
 
 - **Document + in-frame navigation:** mirror paths (`/?u=…`, `/path?u=…`) for correct router pathname.
-- **Subresources in HTML rewrite and fetch/XHR:** always `/api/browse?u=<full-absolute-url>` via `proxyHref` in `rewrite.ts` and `browseAbsolute()` in `proxy-client-script.ts`.
+- **Subresources in HTML rewrite and fetch/XHR:** prefer **mirror** URLs via `mirrorBrowseHref` in `rewrite.ts` (middleware resolves to `/api/browse`). The in-frame client still uses `browseAbsolute()` for dynamic fetch/XHR. Do **not** mirror root-level Next-reserved names such as `runtime.*.js` on the portal origin (see symptom above).
 
-Do not mirror root-level `runtime.*.js` (or similar) on the portal origin.
+**Vite / ES module SPAs** also need §11; mirror URLs alone are not enough for `from "./chunk.js"` inside bundles.
 
 ---
 
-### 8. Issues outside the portal (not fixed in code)
+### 8. New endpoint record redirects to `/endpoints/new?error=url`
+
+**Symptom:** After filling title, description, and URL on **New endpoint**, clicking through to the record screen bounced back to `/endpoints/new?error=url` even when the URL was valid.
+
+**Cause:** The record page tried to set the `teach_allow_hosts` cookie with `cookies().set()` inside a **Server Component**. In the App Router that throws; the error was caught and treated like a bad URL.
+
+**Fix:** Set `teach_allow_hosts` in **`middleware.ts`** when `GET /endpoints/new/record` has valid `title`, `description`, and `url` query params. The record page only validates the URL and shows an error banner when params are missing or invalid (`apps/portal/app/endpoints/new/page.tsx`).
+
+---
+
+### 9. Vite widget stuck on skeleton (e.g. generate-random.org usernames)
+
+**Symptom:** Teach preview showed the page chrome (title “Random Username Generator”, green terminal frame) but only **skeleton placeholders** inside `#username-generator-widget`—no style selector, count, or **Execute generation** button. Static FAQ and nav still rendered.
+
+**Cause:** The site boots a **Vue 3 + Vite** app from `type="module"` chunks under `/build/assets/`. Mirrored script URLs look like:
+
+`http://localhost:3001/build/assets/InputGroup-….js?u=https%3A%2F%2Fgenerate-random.org%2F`
+
+Relative imports in those files (`from"./vue-vendor-….js"`) are resolved by the browser against the module URL. **Query parameters are dropped** for sibling paths, so the next request becomes:
+
+`http://localhost:3001/build/assets/vue-vendor-….js` **without** `?u=…`
+
+Middleware cannot resolve the upstream site → **401** → the module graph fails and Vue never mounts (skeleton HTML stays in the DOM).
+
+**Fix:**
+
+1. **`rewriteEsmImports`** in `rewrite.ts` — when the browse route serves JavaScript, rewrite relative `from "./…"`, `import"./…"`, and `import("./…")` specifiers to **absolute mirror URLs** that include `?u=<site root>`.
+2. **`rewriteUrl`** — emit mirror paths (`mirrorBrowseHref`) for rewritten HTML/CSS/asset attributes instead of only `/api/browse?u=…`, so script `src` and preloads align with the same resolution rules.
+
+**Verification:** Log in to the portal, open  
+`http://localhost:3001/usernames?u=https%3A%2F%2Fgenerate-random.org%2F`  
+(or the same URL inside teach record for `https://generate-random.org/usernames`). Confirm combobox, checkboxes, and `[ EXECUTE GENERATION ]` appear—not only `widget-skeleton`.
+
+---
+
+### 10. Issues outside the portal (not fixed in code)
 
 | Issue | Notes |
 |--------|--------|
@@ -140,10 +176,31 @@ Do not mirror root-level `runtime.*.js` (or similar) on the portal origin.
 
 ---
 
+### 11. Teach browse host allowlist (SSRF guard)
+
+`/api/browse` only fetches hosts that are:
+
+- Set on the **record** screen (`teach_allow_hosts` cookie for the declared entry URL), or
+- Already used in a **published endpoint** manifest for the tenant (`start_url` / `result_url`), or
+- Listed in **`TEACH_BROWSE_ALLOWLIST`** (comma-separated env on the portal).
+
+Blocked requests log `[browse] blocked host=…` and return HTTP 403 HTML. A host the author already opened also allows its subdomains (`goldprice.org` allows `data-asg.goldprice.org`), because price and API calls often live on a sibling host. Prefer **embedded Camoufox** (`apps/studio-browser`) when the allowlist is too tight for exploratory teach.
+
+### 12. Large response headers look like a dropped connection
+
+**Symptom:** The preview says the HTTPS connection was reset, for a site that loads in a normal browser (seen with a large quote page whose CDN sends a very large header block).
+
+**Cause:** Node’s built-in fetch rejects responses whose headers exceed 16KB (`UND_ERR_HEADERS_OVERFLOW`). The browse route reported every fetch failure as a refused connection.
+
+**Fix:** Upstream fetches use Node’s HTTP client with a 256KB header limit, then decompress the body the same way fetch would.
+
+---
+
 ## Verification
 
-- **Unit tests:** `apps/portal/test/browse-rewrite.test.ts` (rewrite, API normalize, SPA fallbacks, base href, trackers).
-- **Manual / browser:** Log in as a portal customer, open teach record with `url=https://7daysperformance.co.uk/`, confirm iframe pathname `/`, no Angular 404, homepage competitions and hero content visible.
+- **Unit tests:** `apps/portal/test/browse-rewrite.test.ts` (rewrite, API normalize, SPA fallbacks, base href, trackers, **ESM import rewrite**).
+- **Manual / browser (Angular):** Log in as a portal customer, open teach record with `url=https://7daysperformance.co.uk/`, confirm iframe pathname `/`, no Angular 404, homepage competitions and hero content visible.
+- **Manual / browser (Vite):** Same with `url=https://generate-random.org/usernames` — username generator widget hydrates (not skeleton-only).
 
 Example record URL (local portal on 3001):
 
@@ -156,6 +213,6 @@ http://localhost:3001/endpoints/new/record?title=…&description=…&url=https%3
 SPAs in an iframe need **two coordinated behaviors**:
 
 1. **Router location** — document URL pathname (and in-app navigations) must match what the customer site expects, on a same-origin URL the portal controls (mirror + `u` site root).
-2. **Assets and APIs** — load through `/api/browse?u=<full URL>` with pass-through rules for JSON and static fallbacks for SPA index.html, without fighting the host framework’s reserved paths (notably Next’s `runtime.*.js`).
+2. **Assets and APIs** — mirror paths + `u` site root (rewritten to `/api/browse` server-side), with **ESM import rewriting** for Vite-style chunks, pass-through rules for JSON, and static fallbacks for SPA index.html—without fighting the host framework’s reserved paths (notably Next’s `runtime.*.js`).
 
 Patching `window.location` in the browser is not a reliable substitute for getting the iframe URL shape right.

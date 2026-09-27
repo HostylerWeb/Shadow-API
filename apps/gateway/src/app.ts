@@ -29,6 +29,16 @@ export function buildGatewayApp(db: Db, options: GatewayOptions = {}): FastifyIn
   app.addHook("preHandler", async (request, reply) => {
     if (!request.url.startsWith("/v1")) return;
     if (request.url === "/v1/openapi.json" || request.url.startsWith("/v1/openapi.json?")) return;
+    if (request.url === "/v1/metrics" || request.url.startsWith("/v1/metrics?")) {
+      const metricsToken = process.env.METRICS_TOKEN;
+      if (metricsToken) {
+        const bearer = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+        if (bearer !== metricsToken) {
+          return reply.code(401).send({ error: "unauthorized" });
+        }
+      }
+      return;
+    }
     const auth = await authenticateRequest(db, request, reply);
     if (!auth) return;
     request.auth = auth;

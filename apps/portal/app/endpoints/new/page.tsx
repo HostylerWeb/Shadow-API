@@ -2,14 +2,22 @@ import Link from "next/link";
 import { Breadcrumb } from "../../breadcrumb";
 import { requireSession } from "../../actions";
 
-export default async function NewEndpointPage() {
+export default async function NewEndpointPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   await requireSession();
+  const params = await searchParams;
   return (
     <main className="customer-page">
       <Breadcrumb items={[{ href: "/endpoints", label: "My endpoints" }, { label: "New endpoint" }]} />
       <header className="page-head">
         <h1>New endpoint</h1>
         <p>Name it and give the page you want to turn into an API.</p>
+        {params.error === "url" ? (
+          <p className="banner">Enter a full website URL, including https:// (for example https://example.com).</p>
+        ) : null}
       </header>
       <form className="card" action="/endpoints/new/record" method="get">
         <label>

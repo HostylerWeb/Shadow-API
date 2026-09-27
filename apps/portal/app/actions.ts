@@ -122,7 +122,7 @@ export async function previewPageAction(pageUrl: string) {
   "use server";
   const current = await session();
   if (!current) return null;
-  const { snapshotPublicPage } = await import("../src/page-snapshot.js");
+  const { snapshotPublicPage } = await import("../src/page-snapshot");
   return snapshotPublicPage(pageUrl.trim());
 }
 
@@ -139,7 +139,7 @@ export async function publishEndpointAction(formData: FormData) {
     redirect(`/endpoints/new/record?error=1&title=${encodeURIComponent(String(formData.get("title") ?? ""))}&description=${encodeURIComponent(String(formData.get("description") ?? ""))}&url=${encodeURIComponent(url1)}`);
   }
   const handle = db();
-  const { publishUserEndpoint } = await import("../src/accounts.js");
+  const { publishUserEndpoint } = await import("../src/accounts");
   const result = await publishUserEndpoint(handle.db, current.userId, current.tenantId, {
     title: String(formData.get("title") ?? ""),
     description: String(formData.get("description") ?? ""),
@@ -161,6 +161,7 @@ export async function publishEndpointAction(formData: FormData) {
     inputSelector: String(formData.get("inputSelector") ?? ""),
     formFieldsJson: String(formData.get("formFieldsJson") ?? "[]"),
     stagesJson: String(formData.get("stagesJson") ?? "[]"),
+    actionsJson: String(formData.get("actionsJson") ?? "[]"),
     submitSelector: String(formData.get("submitSelector") ?? ""),
     requiresSession: String(formData.get("requiresSession") ?? "") === "1",
     fixedConnectorId: String(formData.get("connectorId") ?? "").trim() || undefined,
@@ -179,7 +180,7 @@ export async function confirmEndpointTestAction(formData: FormData) {
   const connectorId = String(formData.get("connector_id") ?? "");
   const passed = String(formData.get("passed") ?? "") === "yes";
   const handle = db();
-  const { setEndpointTestResult } = await import("../src/accounts.js");
+  const { setEndpointTestResult } = await import("../src/accounts");
   await setEndpointTestResult(handle.db, current.tenantId, connectorId, passed);
   await handle.close();
   if (!passed) redirect(`/endpoints/${encodeURIComponent(connectorId)}/edit`);
@@ -191,7 +192,7 @@ export async function renameEndpointAction(formData: FormData) {
   const current = await session();
   if (!current) redirect("/login");
   const handle = db();
-  const { setEndpointCopy } = await import("../src/accounts.js");
+  const { setEndpointCopy } = await import("../src/accounts");
   await setEndpointCopy(
     handle.db,
     current.tenantId,
@@ -210,7 +211,7 @@ export async function setEndpointLimitAction(formData: FormData) {
   const connectorId = String(formData.get("connector_id") ?? "");
   const maxResults = Number(formData.get("max_results") ?? "50");
   const handle = db();
-  const { setEndpointMaxResults } = await import("../src/accounts.js");
+  const { setEndpointMaxResults } = await import("../src/accounts");
   await setEndpointMaxResults(handle.db, current.tenantId, connectorId, maxResults);
   await handle.close();
   redirect("/endpoints?limit=1");
@@ -221,7 +222,7 @@ export async function deleteEndpointAction(formData: FormData) {
   const current = await session();
   if (!current) redirect("/login");
   const handle = db();
-  const { deleteUserEndpoint } = await import("../src/accounts.js");
+  const { deleteUserEndpoint } = await import("../src/accounts");
   await deleteUserEndpoint(handle.db, current.tenantId, String(formData.get("connector_id") ?? ""));
   await handle.close();
   redirect("/endpoints");
@@ -267,7 +268,7 @@ export async function runJobAction(formData: FormData) {
   const current = await session();
   if (!current) redirect("/login");
   const handle = db();
-  const { customerKeyMatches } = await import("../src/accounts.js");
+  const { customerKeyMatches } = await import("../src/accounts");
   const secret = String(formData.get("api_key") ?? "").trim();
   const connectorId = String(formData.get("connector_id") ?? "");
   const ownsKey = await customerKeyMatches(handle.db, current.tenantId, secret);
@@ -329,7 +330,7 @@ export async function adminPlanAction(formData: FormData) {
     await handle.close();
     redirect("/endpoints");
   }
-  const { setTenantPlan } = await import("../../gateway/src/plans-store.ts");
+  const { setTenantPlan } = await import("../src/plans");
   await setTenantPlan(handle.db, String(formData.get("tenantId") ?? ""), String(formData.get("plan") ?? "developer") as "developer");
   const tenantId = String(formData.get("tenantId") ?? "");
   await handle.close();
@@ -350,7 +351,7 @@ export async function adminRoleAction(formData: FormData) {
     redirect("/admin/tenants");
   }
   const { portalUsers } = await import("@shadowapi/db/schema");
-  const { eq } = await import("drizzle-orm");
+  const { eq } = await import("@shadowapi/db");
   const authorUntil = role === "author" ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
   await handle.db.update(portalUsers).set({ role, authorUntil }).where(eq(portalUsers.tenantId, tenantId));
   await handle.close();
@@ -371,7 +372,7 @@ export async function adminRevokeKeyAction(formData: FormData) {
     redirect("/endpoints");
   }
   const { apiKeys } = await import("@shadowapi/db/schema");
-  const { and, eq } = await import("drizzle-orm");
+  const { and, eq } = await import("@shadowapi/db");
   const row = (await handle.db.select().from(apiKeys).where(and(eq(apiKeys.id, keyId), eq(apiKeys.tenantId, tenantId))).limit(1))[0];
   if (row && row.name !== "dashboard") {
     await revokeApiKey(handle.db, tenantId, keyId);
@@ -393,7 +394,7 @@ export async function adminDeleteTenantAction(formData: FormData) {
     redirect("/admin/tenants");
   }
   const { tenants } = await import("@shadowapi/db/schema");
-  const { eq } = await import("drizzle-orm");
+  const { eq } = await import("@shadowapi/db");
   await handle.db.delete(tenants).where(eq(tenants.id, tenantId));
   await handle.close();
   redirect("/admin/tenants");
@@ -412,7 +413,7 @@ export async function adminCancelJobAction(formData: FormData) {
     redirect("/endpoints");
   }
   const { jobs } = await import("@shadowapi/db/schema");
-  const { eq } = await import("drizzle-orm");
+  const { eq } = await import("@shadowapi/db");
   const { assertTransition, isTerminalStatus } = await import("@shadowapi/core");
   const job = (await handle.db.select().from(jobs).where(eq(jobs.id, id)).limit(1))[0];
   if (job && !isTerminalStatus(job.status)) {
@@ -421,4 +422,25 @@ export async function adminCancelJobAction(formData: FormData) {
   }
   await handle.close();
   redirect(`/admin/jobs/${id}`);
+}
+
+export async function forgotPasswordAction(formData: FormData) {
+  "use server";
+  const email = String(formData.get("email") ?? "");
+  const handle = db();
+  const { createPasswordReset } = await import("../src/password-reset");
+  await createPasswordReset(handle.db, email);
+  await handle.close();
+  redirect("/login?reset=sent");
+}
+
+export async function resetPasswordAction(formData: FormData) {
+  "use server";
+  const token = String(formData.get("token") ?? "");
+  const password = String(formData.get("password") ?? "");
+  const handle = db();
+  const { resetPasswordWithToken } = await import("../src/password-reset");
+  const ok = await resetPasswordWithToken(handle.db, token, password);
+  await handle.close();
+  redirect(ok ? "/login" : "/reset-password?error=1");
 }

@@ -53,7 +53,7 @@ If the source system needs login or verification, that is handled **once during 
 This is for **account holders who author integrations** (your team, agencies, or advanced tenants). It is **not** what catalog-only buyers do day to day.
 
 1. **Create an account** and sign in to the **dashboard**.  
-2. Open **Studio** and use the **embedded Camofox browser** (preview) with **your tenant’s own session** — cookies and storage isolated from every other customer on the platform (see [PROJECT.md §6.4](./PROJECT.md#64-session--cookie-vault)).  
+2. Open **Studio** (`/studio`) and use the **embedded Camoufox browser** (via `apps/studio-browser`) with **your tenant’s own session** — cookies and storage isolated from every other customer on the platform (see [PROJECT.md §6.4](./PROJECT.md#64-session--cookie-vault)).  
 3. **Record a workflow**, not a single bookmark. Real parcel tracking (and similar flows) often use **multiple steps and URLs**, for example:  
    - Step A: `https://domain.com/tracking` — enter the parcel number and submit  
    - Step B: results on another URL such as `https://domain.com/result?tracking=123` or a path like `/result/123`  

@@ -2,7 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, count, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, sql } from "@shadowapi/db";
 import type { Db } from "@shadowapi/db";
 import { decryptVault, encryptVault } from "@shadowapi/core";
 import { compileStudioGraph, compileTeachGraph, loadCarrierFixture, loadGraph, replayStudioGraph, runCarrierFixture, runWarehouseFixture, loadWarehouseFixture, STUDIO_CONNECTOR_ID, STUDIO_GRAPH_VERSION, waitSelectorFromExtract } from "@shadowapi/graph-runner";
@@ -267,7 +267,7 @@ export async function activeKeyCount(db: Db, tenantId: string): Promise<number> 
   return Number(rows[0]?.n ?? 0);
 }
 
-export const MAX_CUSTOM_ENDPOINTS = 12;
+export const MAX_CUSTOM_ENDPOINTS = 40;
 
 function slugConnectorId(title: string): string {
   const slug = title
@@ -317,7 +317,7 @@ async function patchEndpointManifest(
   if (manifest.tenant_id !== tenantId) return false;
   await db
     .update(connectorVersions)
-    .set({ manifest: { ...row.manifest, ...patch } })
+    .set({ manifest: { ...(row.manifest as Record<string, unknown>), ...patch } })
     .where(eq(connectorVersions.id, row.id));
   return true;
 }
@@ -486,6 +486,7 @@ export async function publishUserEndpoint(
     inputSelector?: string;
     formFieldsJson?: string;
     stagesJson?: string;
+    actionsJson?: string;
     submitSelector?: string;
     requiresSession?: boolean;
     fixedConnectorId?: string;
@@ -516,13 +517,29 @@ export async function publishUserEndpoint(
     input.outputName,
   );
   const publishedOutputName = outputNameFromExtract(extract, input.outputName);
-  let formFields: Array<{ key: string; selector: string }> = [];
+  let formFields: Array<{ key: string; selector: string; control?: "text" | "select" | "checkbox" | "click"; sample?: string }> = [];
   try {
-    formFields = JSON.parse(input.formFieldsJson ?? "[]") as Array<{ key: string; selector: string }>;
+    const parsed = JSON.parse(input.formFieldsJson ?? "[]") as typeof formFields;
+    formFields = Array.isArray(parsed)
+      ? parsed.filter((field) => field && typeof field.key === "string" && typeof field.selector === "string")
+      : [];
   } catch {
     formFields = [];
   }
-  let stages: Array<{ url: string; fields: Array<{ key: string; selector: string }>; clickSelector?: string }> = [];
+  let actions: Array<{ type: "field"; key: string } | { type: "click"; selector: string; label?: string }> = [];
+  try {
+    const parsed = JSON.parse(input.actionsJson ?? "[]") as typeof actions;
+    if (Array.isArray(parsed)) actions = parsed.filter((action) => action && (action.type === "field" || action.type === "click"));
+  } catch {
+    actions = [];
+  }
+  let stages: Array<{
+    url: string;
+    fields: Array<{ key: string; selector: string; control?: "text" | "select" | "checkbox" | "click" }>;
+    clickSelector?: string;
+    clicks?: Array<{ selector: string; label?: string }>;
+    actions?: Array<{ type: "field"; key: string } | { type: "click"; selector: string; label?: string }>;
+  }> = [];
   try {
     const parsed = JSON.parse(input.stagesJson ?? "[]") as typeof stages;
     if (Array.isArray(parsed)) stages = parsed.filter((stage) => stage && typeof stage.url === "string");
@@ -536,15 +553,14 @@ export async function publishUserEndpoint(
       return { ok: false, message: "Finish mapping outputs on the result page before publishing." };
     }
   }
-  const inputSchema =
-    kind === "read"
+  const callerFields = formFields.filter((field) => (field.control ?? "text") !== "click");
+  const inputSchema = callerFields.length
+    ? Object.fromEntries(
+        callerFields.map((field) => [field.key, { type: "string", required: !(field.sample && field.sample.length > 0) }]),
+      )
+    : kind === "read"
       ? {}
-      : Object.fromEntries(
-          (formFields.length ? formFields : [{ key: apiInput || "query" }]).map((field) => [
-            field.key,
-            { type: "string", required: true },
-          ]),
-        );
+      : Object.fromEntries([[apiInput || "query", { type: "string", required: true }]]);
   const resultUrl = kind === "read" ? input.url1 : templatizeResultUrl(input.url2, apiInput || "query", templating);
   const waitSelector = waitSelectorFromExtract(extract);
   const graph = teachMarked
@@ -557,6 +573,7 @@ export async function publishUserEndpoint(
         submitSelector: input.submitSelector?.trim() || undefined,
         waitSelector,
         stages: stages.length ? stages : undefined,
+        actions: actions.length ? actions : undefined,
       })
     : compileStudioGraph({ ...input, kind, url2: resultUrl });
   if (!teachMarked) {
@@ -583,6 +600,8 @@ export async function publishUserEndpoint(
     extract,
     input_selector: input.inputSelector?.trim() || undefined,
     form_fields: formFields.length ? formFields : undefined,
+    actions: actions.length ? actions : undefined,
+    in_place: callerFields.length > 0 && input.url1 === input.url2 ? true : undefined,
     submit_selector: input.submitSelector?.trim() || undefined,
     requires_session: input.requiresSession === true ? true : undefined,
     inputs: inputSchema,

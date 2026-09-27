@@ -2,7 +2,7 @@
 
 Follow this file in order. Product behavior is in [OVERVIEW.md](./OVERVIEW.md). Architecture and the `carrier_x_pod` contract are in [PROJECT.md](./PROJECT.md). Why this order matters is in [POTENTIAL.md](./POTENTIAL.md).
 
-**Stack:** TypeScript monorepo, Fastify gateway, PostgreSQL, Redis + BullMQ, S3, separate Camofox workers, Next.js portal/Studio later. Billing is a local plan gateway until a payment provider is chosen.
+**Stack:** TypeScript monorepo, Fastify gateway, PostgreSQL, Redis + BullMQ, S3, separate Camoufox workers, Next.js portal/Studio later. Billing is a local plan gateway until a payment provider is chosen.
 
 **Versions:** use the **latest stable release** of everything at the time you install or upgrade it. That includes Node.js, pnpm, TypeScript, Fastify, PostgreSQL, Redis, BullMQ, the AWS/S3 SDK, Next.js, Docker images, and every other direct dependency. Do not pin an older major because a doc once named it. Do not stay on a deprecated Node release. When adding a package, take the current latest version, commit the lockfile, and re-check latest before each chapter that adds dependencies. Connector `connector_version` / `graph_version` are product versions — they are not this rule.
 
@@ -111,7 +111,7 @@ Schema lives in `packages/db` (`pnpm db:migrate`).
 
 ### 4.2 Fake runner
 
-- [x] Worker completes a job using a stub graph (fixed JSON out) so the API is testable before Camofox
+- [x] Worker completes a job using a stub graph (fixed JSON out) so the API is testable before Camoufox
 - [x] `blocked` and `failed` paths can be forced in tests (`inputs.stub_outcome`)
 
 **Done when:** `POST /v1/jobs` with `run_mode: live` goes queued → running → succeeded via the worker, and a cached repeat does not.
@@ -132,7 +132,7 @@ Schema lives in `packages/db` (`pnpm db:migrate`).
 
 - [x] CI fails if `packages/graph-runner` fixture tests fail (`pnpm test` runs them)
 - [x] Replay fixtures from recorded HTML/HAR (`packages/graph-runner/fixtures`)
-- [x] Runner has zero Camofox imports
+- [x] Runner has zero Camoufox imports
 
 **Done when:** the runner’s tests pass in CI on fixture data only.
 
@@ -177,7 +177,7 @@ Spec: [PROJECT.md §10](./PROJECT.md#10-reference-connector-carrier-x-pod).
 
 ### 7.1 Process boundary
 
-- [x] Camofox launches only inside `apps/worker`
+- [x] Camoufox launches only inside `apps/worker`
 - [x] Gateway image/process has no browser binary
 - [x] Proxy settings come from the connector profile (datacenter first, residential fallback)
 - [x] Sticky proxy when the session is bound to an egress IP
@@ -202,7 +202,7 @@ The “live” run uses the checked-in staging mirror (`connectors/carrier_x_pod
 - [x] Postgres `sessions` rows scoped to `(tenant_id, connector_id, session_id)`; ciphertext at rest (AES-256-GCM + KMS)
 - [x] Clients pass **`session_id` only** — never raw cookies in `POST /v1/jobs`
 - [x] Gateway validates API key → tenant and that `session_id` belongs to that tenant; **decrypt only on the worker**
-- [x] Warm Camofox pool per worker machine; **one isolated browser context per job** with `storageState` injected
+- [x] Warm Camoufox pool per worker machine; **one isolated browser context per job** with `storageState` injected
 - [x] After job: `storageState()` → re-encrypt → update row; bump `session_generation` when session identity changes
 - [x] Always `context.close()` before the worker handles another tenant
 - [x] Dead session → `SESSION_EXPIRED` and a clear reauth action for ops
@@ -290,7 +290,7 @@ Plan changes go through the local billing route `POST /v1/billing/plan`. There i
 - [x] More than one gateway replica behind a load balancer
 - [x] Health checks; deploy does not drop in-flight polls
 - [x] Status reads prefer Redis/Postgres indexes on `(tenant_id, job_id)`
-- [x] No Camofox, no large file bytes, in the gateway process
+- [x] No Camoufox, no large file bytes, in the gateway process
 
 ### 12.2 Worker tier
 
@@ -319,7 +319,7 @@ Plan changes go through the local billing route `POST /v1/billing/plan`. There i
 
 ### 13.2 Embedded browser and vault
 
-- [x] Embedded **Camofox** in Studio for recording (tenant’s own session; isolated from other tenants)
+- [x] Embedded **Camoufox** in Studio for recording (tenant’s own session; isolated from other tenants)
 - [x] Save vault session for connector after login/MFA; never mix cookies across tenants
 - [x] Optional VNC path for edge cases; same isolation rules
 
@@ -404,7 +404,7 @@ The diff proposer is local and offline. `POST /v1/jobs` does not call it. An aut
 | 3 | Public API | curl start/poll/result |
 | 4 | Queue | Live path with a fake result |
 | 5–6 | Runner + `carrier_x_pod` | Seven fixtures green |
-| 7–8 | Camofox, vault, files | One real POD or status |
+| 7–8 | Camoufox, vault, files | One real POD or status |
 | 9 | MCP | Agent uses the same contract |
 | 10–11 | Portal + plans | Key, docs, meters |
 | 12 | Scale | Polls stay fast under load |

@@ -53,10 +53,11 @@ export function computeTeachGuide(input: {
   canPublish: boolean;
   picking: boolean;
   pendingPick: boolean;
+  inPlace?: boolean;
 }): { steps: TeachGuideStep[]; headline: string; detail: string } {
   const readOnly = Boolean(input.readOnlyWorkflow);
   const labeledStart = !input.intentPending || input.onActionPage || input.onResultPage;
-  const formDone = readOnly || input.formFieldCount > 0 || input.hasResultPage;
+  const formDone = readOnly || input.formFieldCount > 0 || (input.hasResultPage && !input.inPlace);
   const onResults = input.onResultPage;
   const rowDone = input.resultShape !== "list" || input.hasRow;
   const fieldsDone = input.outputFieldCount > 0;
@@ -110,7 +111,7 @@ export function computeTeachGuide(input: {
     return {
       steps,
       headline: "What is this page?",
-      detail: "Pick one option in the panel: where you start, where you search, or where the answers appear.",
+      detail: "Pick the sentence that matches this screen: first page, form then a new page, answers already visible, or form and answers on the same page.",
     };
   }
   if (readOnly && input.onResultPage) {
@@ -122,7 +123,8 @@ export function computeTeachGuide(input: {
       };
     }
   }
-  if (input.onActionPage || (!readOnly && input.actionUrlSet && !input.hasResultPage && !input.onResultPage)) {
+  const mappingResults = input.onResultPage && (!input.inPlace || input.formFieldCount > 0);
+  if (!mappingResults && (input.onActionPage || (!readOnly && input.actionUrlSet && !input.hasResultPage && !input.onResultPage))) {
     if (!input.onActionPage && input.actionUrlSet) {
       return {
         steps,
@@ -133,14 +135,14 @@ export function computeTeachGuide(input: {
     if (input.formFieldCount === 0) {
       return {
         steps,
-        headline: "Step 2 — add form fields",
-        detail: "Press “Add form field from page”, then click the search box (or each input) in the website. Name each field in the panel on the right.",
+        headline: "Use the form once",
+        detail: "Press Start recording. Set the options in the website and press the button that shows the answers. Then press Done.",
       };
     }
     return {
       steps,
       headline: "Step 2 — run a search, then label results",
-      detail: "Use the site like a real user. On the results page, choose “This page shows the answers”. Step 3 starts there.",
+      detail: "Use the site like a real user. On the results page, choose “The answers are already here”. Step 3 starts there.",
     };
   }
   if (input.hasResultPage && !input.onResultPage) {

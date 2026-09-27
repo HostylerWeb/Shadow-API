@@ -208,7 +208,7 @@ export function domEvalExtractComposite(composite: CompositeExtract): Record<str
       for (const row of rows) {
         const item: Record<string, string> = {};
         for (const field of fields) {
-          const el = row.querySelector(field.selector);
+          const el = !field.selector || field.selector === ":scope" ? row : row.querySelector(field.selector);
           item[field.key] = el ? readableElementText(el) : "";
         }
         if (Object.values(item).some((v) => v.length > 0)) items.push(item);
@@ -322,27 +322,48 @@ export async function evaluateExtractComposite(
         }
         return ownText;
       }
+      function queryAllDeep(selector: string, root: ParentNode = document): Element[] {
+        try {
+          const direct = Array.from(root.querySelectorAll(selector));
+          if (direct.length) return direct;
+        } catch { /* fall through to open shadow roots */ }
+        const last = selector.trim().split(/\s+/).pop() || selector;
+        const matched: Element[] = [];
+        const pending: ParentNode[] = [root];
+        while (pending.length) {
+          const current = pending.pop();
+          if (!current) break;
+          for (const node of Array.from(current.querySelectorAll("*"))) {
+            const host = node as Element & { shadowRoot?: ShadowRoot | null };
+            if (host.shadowRoot) pending.push(host.shadowRoot);
+            try {
+              if (node.matches(selector) || (last !== selector && node.matches(last))) matched.push(node);
+            } catch { /* ignore */ }
+          }
+        }
+        return matched;
+      }
       const out: Record<string, unknown> = {};
       for (const block of c.blocks) {
         if (block.type === "scalar") {
-          const el = document.querySelector(sanitize(block.selector));
+          const el = queryAllDeep(sanitize(block.selector))[0] ?? null;
           out[block.key] = el ? readEl(el) : "";
         }
         if (block.type === "fields") {
           for (const field of block.fields) {
-            const el = document.querySelector(sanitize(field.selector));
+            const el = queryAllDeep(sanitize(field.selector))[0] ?? null;
             out[field.key] = el ? readEl(el) : "";
           }
         }
         if (block.type === "list") {
           const rowSel = sanitize(block.row_selector);
           const fields = block.fields.map((f) => ({ key: f.key, selector: sanitize(f.selector) }));
-          const rows = Array.from(document.querySelectorAll(rowSel)).slice(0, rowLimit);
+          const rows = queryAllDeep(rowSel).slice(0, rowLimit);
           const items: Record<string, string>[] = [];
           for (const row of rows) {
             const item: Record<string, string> = {};
             for (const field of fields) {
-              const el = row.querySelector(field.selector);
+              const el = !field.selector || field.selector === ":scope" ? row : queryAllDeep(field.selector, row)[0] ?? null;
               item[field.key] = el ? readEl(el) : "";
             }
             if (Object.values(item).some((v) => v.length > 0)) items.push(item);

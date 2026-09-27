@@ -37,11 +37,14 @@ Requirements: **Node 22+**, **pnpm** (latest), **Docker** for Postgres, Redis, a
 ```bash
 cp .env.example .env
 pnpm install
+pnpm build              # compile workspace packages before dev:gateway / dev:worker
 pnpm dev:infra          # postgres :5436, redis :6382, minio :9000 (host ports)
 pnpm db:migrate         # apply schema (Chapter 2)
-pnpm db:seed            # dev tenant + API key (print once)
+pnpm db:seed            # dev tenant + API key (print once); optional ADMIN_EMAIL / ADMIN_PASSWORD for portal admin
+set -a && source .env && set +a
 pnpm dev:gateway        # http://localhost:3000/health
-pnpm dev:worker         # BullMQ consumer (queue: shadowapi-jobs)
+pnpm dev:worker         # BullMQ consumer (queue: shadowapi-jobs); set STAGING_ORIGIN for live carrier_x_pod
+pnpm --filter @shadowapi/portal dev   # http://localhost:3001
 
 # Chapter 3 (gateway only — no worker required). Failure shapes: docs/API-FAILURES.md
 # export DEV_API_KEY from pnpm db:seed

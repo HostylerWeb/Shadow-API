@@ -19,6 +19,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </label>
         <button type="submit">Continue</button>
         <p className="muted">
+          <a href="/forgot-password">Forgot password?</a>
+        </p>
+        <p className="muted">
           New customer? <a href="/signup">Create an account</a>
         </p>
       </form>

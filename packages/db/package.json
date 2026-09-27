@@ -22,6 +22,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx src/migrate.ts",
     "db:seed": "tsx src/seed-dev.ts",
+    "db:seed-portal": "tsx src/seed-portal.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

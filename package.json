@@ -5,6 +5,11 @@
   "engines": {
     "node": ">=22"
   },
+  "pnpm": {
+    "overrides": {
+      "drizzle-orm": "0.45.3"
+    }
+  },
   "devDependencies": {
     "@babel/core": "^7.29.7",
     "@babel/eslint-parser": "^7.29.9",
@@ -18,16 +23,19 @@
   "scripts": {
     "db:migrate": "pnpm --filter @shadowapi/db run db:migrate",
     "db:seed": "pnpm --filter @shadowapi/db run db:seed",
+    "db:seed-portal": "pnpm --filter @shadowapi/db run db:seed-portal",
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
     "dev:clean-jobs": "node scripts/dev-clean-jobs.mjs",
     "dev:gateway": "pnpm --filter @shadowapi/gateway dev",
     "dev:gateways": "node scripts/dev-gateways.mjs",
     "dev:worker": "pnpm --filter @shadowapi/worker dev",
+    "dev:studio-browser": "pnpm --filter @shadowapi/studio-browser dev",
     "dev:workers": "node scripts/dev-workers.mjs",
-    "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build",
-    "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run typecheck",
+    "build": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker run build && pnpm --filter @shadowapi/portal run build",
+    "typecheck": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run typecheck && pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/db --filter @shadowapi/teach-extract run build && pnpm --filter @shadowapi/gateway --filter @shadowapi/worker --filter @shadowapi/studio-browser run typecheck",
     "test": "pnpm --filter @shadowapi/core --filter @shadowapi/graph-runner --filter @shadowapi/teach-extract --filter @shadowapi/gateway --filter @shadowapi/worker --filter @shadowapi/portal run test",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:manifests": "node scripts/lint-manifests.mjs"
   }
 }

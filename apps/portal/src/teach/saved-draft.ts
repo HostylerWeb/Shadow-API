@@ -1,6 +1,6 @@
 import type { ExtractBlock, ExtractSpec } from "@shadowapi/teach-extract";
 import { newTeachField } from "./mapping";
-import type { TeachField } from "./protocol";
+import { pageKeysMatch, type TeachControl, type TeachField } from "./protocol";
 import { applyPageIntent, emptyTeachSession, type TeachSessionState } from "./session";
 
 export type SavedTeachDraft = {
@@ -13,10 +13,33 @@ export type SavedTeachDraft = {
   fields: TeachField[];
   extraBlocks: ExtractBlock[];
   formFields: TeachField[];
+  actions: Array<{ type: "field"; key: string } | { type: "click"; selector: string; label?: string }>;
   submitSelector: string;
   requiresSession: boolean;
   stages: Array<{ url: string; fields: Array<{ key: string; selector: string }>; clickSelector?: string }>;
 };
+
+function isControl(value: unknown): value is TeachControl {
+  return value === "text" || value === "select" || value === "checkbox" || value === "click";
+}
+
+function asActions(raw: unknown): SavedTeachDraft["actions"] {
+  if (!Array.isArray(raw)) return [];
+  const actions: SavedTeachDraft["actions"] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const type = "type" in item ? item.type : "";
+    if (type === "field" && "key" in item && typeof item.key === "string") {
+      actions.push({ type: "field", key: item.key });
+      continue;
+    }
+    if (type === "click" && "selector" in item && typeof item.selector === "string") {
+      const label = "label" in item && typeof item.label === "string" ? item.label : undefined;
+      actions.push({ type: "click", selector: item.selector, label });
+    }
+  }
+  return actions;
+}
 
 function asFields(raw: unknown): TeachField[] {
   if (!Array.isArray(raw)) return [];
@@ -25,7 +48,8 @@ function asFields(raw: unknown): TeachField[] {
     const key = "key" in item && typeof item.key === "string" ? item.key : "";
     const selector = "selector" in item && typeof item.selector === "string" ? item.selector : "";
     if (!key || !selector) return [];
-    return [newTeachField({ key, selector })];
+    const control = "control" in item && isControl(item.control) ? item.control : undefined;
+    return [newTeachField({ key, selector, control })];
   });
 }
 
@@ -79,6 +103,10 @@ export function draftFromManifest(connectorId: string, manifest: Record<string, 
   }
 
   const stages = Array.isArray(manifest.stages) ? (manifest.stages as SavedTeachDraft["stages"]) : [];
+  const formFields = asFields(manifest.form_fields);
+  if (manifest.in_place === true || (formFields.length > 0 && pageKeysMatch(startUrl, resultUrl))) {
+    session = { ...session, inPlace: true, actionUrl: session.actionUrl || startUrl, pattern: "P1" };
+  }
   return {
     connectorId,
     session,
@@ -88,7 +116,8 @@ export function draftFromManifest(connectorId: string, manifest: Record<string, 
     rowSelector,
     fields,
     extraBlocks,
-    formFields: asFields(manifest.form_fields),
+    formFields,
+    actions: asActions(manifest.actions),
     submitSelector: typeof manifest.submit_selector === "string" ? manifest.submit_selector : "",
     requiresSession: manifest.requires_session === true,
     stages,
