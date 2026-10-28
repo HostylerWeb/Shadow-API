@@ -42,6 +42,13 @@ export function plainText(md) {
     .slice(0, 3800);
 }
 
+function headerSafe(s) {
+  return String(s || "")
+    .replace(/\u2014/g, "-")
+    .replace(/[^\x00-\xff]/g, "?")
+    .slice(0, 250);
+}
+
 /**
  * @param {{ title: string, body: string, priority?: string, tags?: string, eventKey: string }} msg
  */
@@ -56,7 +63,7 @@ export async function sendNtfy(msg) {
 
   const url = `${cfg.server}/${encodeURIComponent(cfg.topic)}`;
   const headers = {
-    Title: msg.title.slice(0, 250),
+    Title: headerSafe(msg.title),
     Priority: msg.priority || "default",
   };
   if (msg.tags) headers.Tags = msg.tags;
