@@ -56,7 +56,7 @@ That means the **poll loop is healthy**. It does **not** mean the **chat agent**
 
 7. **Optional (no LLM):** `XAU_EMIT_NOTIFY=1` on the loop prints `XAU_AGENT_CHAT` lines when there is a watch/stand-down/WAIT line (`server/xau-agent-notify.mjs`).
 
-8. **Phone alerts (ntfy):** See **[NTFY-PHONE-ALERTS.md](./NTFY-PHONE-ALERTS.md)**. Summary: with `XAU_NTFY=1` (default in `run-agent-loop.sh`), the loop POSTs to local ntfy on **`:2586`** for **new WATCH ONLY**, **stand-down**, **ENTER** (evaluation log), or **bridge error**. Setup: `node server/xau-ntfy-push.mjs --setup` · test: `--test` · off: `XAU_NTFY=0`.
+8. **Phone alerts (ntfy):** See **[NTFY-PHONE-ALERTS.md](./NTFY-PHONE-ALERTS.md)** (includes **Tailscale / ntfy.sh / VPS** when the PC IP changes). Summary: with `XAU_NTFY=1` (default in `run-agent-loop.sh`), the loop POSTs to ntfy on **`:2586`** (prefer `XAU_NTFY_SERVER=http://127.0.0.1:2586`) for **new WATCH ONLY**, **stand-down**, **ENTER** (evaluation log), or **bridge error**. Setup: `node server/xau-ntfy-push.mjs --setup` · test: `--test` · off: `XAU_NTFY=0`. Separate from Cursor tick wake — see [CURSOR-AUTOMATION.md](./CURSOR-AUTOMATION.md).
 
 **Quick test:** `tail -1 ~/.local/state/xau-scalp-agent/ticks.jsonl` — if `ts` advances every ~60s but you get **no** agent notifications, fix **monitoring**, not TradingView.
 

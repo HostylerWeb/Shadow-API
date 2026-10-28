@@ -19,7 +19,7 @@ Same **Chrome Agent Bridge** extension and WebSocket hub as YouTube chat (`tools
 
 ## How it connects (today vs next)
 
-**Today:** Poll loop uses **`tradingviewChart`** snapshots (same extension) + **5m Pine `XAUAGENT`** session levels → **`levels-auto.json`**. MCP tool **`chrome_tradingview_chart`** for manual checks. Optional **`node server/xau-agent-notify.mjs`** for LLM-free chat lines. **`XAU_NTFY=1`** pushes watch/stand-down/ENTER to your phone — see **[NTFY-PHONE-ALERTS.md](./NTFY-PHONE-ALERTS.md)**.
+**Today:** Poll loop uses **`tradingviewChart`** snapshots (same extension) + **5m Pine `XAUAGENT`** session levels → **`levels-auto.json`**. MCP tool **`chrome_tradingview_chart`** for manual checks. Optional **`node server/xau-agent-notify.mjs`** for LLM-free chat lines. **`XAU_NTFY=1`** pushes watch/stand-down/ENTER to your phone — see **[NTFY-PHONE-ALERTS.md](./NTFY-PHONE-ALERTS.md)** (loop → `127.0.0.1:2586`; phone → Tailscale / `ntfy.sh` / LAN options).
 
 **Planned:** Further TV DOM tools (timeframe sync) if legend targeting still drifts.
 

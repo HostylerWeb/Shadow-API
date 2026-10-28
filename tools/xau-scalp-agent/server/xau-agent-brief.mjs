@@ -5,6 +5,7 @@
  */
 import fs from "node:fs";
 import { getContextPath } from "./xau-store.js";
+import { simplifyDataIssue, simplifyPlanBlockReason } from "./xau-user-messages.mjs";
 
 function readContext() {
   const p = getContextPath();
@@ -21,7 +22,7 @@ function next5mUtcIso(ts) {
 
 /** @param {object} ctx context.json */
 export function formatUserBrief(ctx) {
-  if (!ctx) return "**XAU** — no context.json yet. Start the poll loop.";
+  if (!ctx) return "**Gold (XAU)** — loop not running yet. Start `run-agent-loop.sh`.";
 
   const m5 = ctx.m5?.c;
   const m15 = ctx.m15?.c;
@@ -35,123 +36,96 @@ export function formatUserBrief(ctx) {
   const ts = ctx.ts ?? new Date().toISOString();
 
   const lines = [];
-  lines.push(`**XAU scalp — ${ts.replace("T", " ").slice(0, 19)} UTC**`);
+  lines.push(`**Gold (XAU) — ${ts.replace("T", " ").slice(0, 19)} UTC**`);
   lines.push("");
 
   if (ctx.ok === false) {
-    lines.push("**Action:** DO NOT ENTER — bridge / loop error.");
-    lines.push("**Why:** Chrome extension or TradingView tabs not reachable.");
-    lines.push("**When:** Fix bridge, reload extension, open 5m + 15m tabs, restart loop.");
+    lines.push("**No trade — charts not connected.**");
+    lines.push("");
+    lines.push("Fix: Chrome extension on, bridge running, 5m + 15m TradingView tabs open.");
     return lines.join("\n");
   }
 
   if (ctx.dataIntegrity?.ok === false) {
-    const detail =
-      (ctx.dataIntegrity.issues || []).join("; ") ||
-      ctx.dataIntegrity.m5ArchiveNote ||
-      "feed check failed";
-    lines.push("**Action:** DO NOT ENTER — data not trustworthy.");
-    lines.push(`**Why:** ${detail}`);
-    lines.push("**When:** Move mouse off chart legends; refresh tabs; wait for `dataIntegrity.ok`.");
+    const issues = (ctx.dataIntegrity.issues || []).map(simplifyDataIssue);
+    const detail = issues.join(" ") || ctx.dataIntegrity.m5ArchiveNote || "Chart data failed checks.";
+    lines.push("**No trade — chart data not reliable.**");
     lines.push("");
-    lines.push(`**Price (forming):** M5 ~$${m5 ?? "?"}, M15 ~$${m15 ?? "?"}`);
+    lines.push(detail);
+    lines.push("");
+    lines.push(`Price now (approx): **$${m5 ?? "?"}** (5m) · **$${m15 ?? "?"}** (15m)`);
     return lines.join("\n");
   }
 
   if (ctx.watchRevoked?.notify && ctx.watchRevoked?.chatDoNotEnter) {
-    lines.push("**Action:** DO NOT ENTER — stand down from the last idea.");
+    lines.push("**No trade — last alert was cancelled.**");
     lines.push("");
     lines.push(ctx.watchRevoked.chatDoNotEnter);
     lines.push("");
-    lines.push(`**Price now:** ~$${m5 ?? "?"}`);
-    lines.push("**When:** Wait for a **new** watch alert (not the old levels).");
+    lines.push(`Price now: **~$${m5 ?? "?"}**`);
+    lines.push("Wait for a **new** phone/chat alert before acting.");
     return lines.join("\n");
   }
 
   if (tp.actionableWatch && tp.chatDraft && !ctx.watchSuppressed) {
-    lines.push("**Action:** PREPARE ONLY — you decide on MT5 (not auto-entry).");
-    lines.push("**Why:** Price in zone + plan passed watch filters + min R:R math.");
-    lines.push("**When:** Enter only if the **live chart** still matches; skip if price runs away.");
+    lines.push("**Get ready — possible setup.**");
+    lines.push("");
+    lines.push("Check the live chart. Only trade if it still makes sense; skip if price ran away.");
     lines.push("");
     lines.push(tp.chatDraft);
     return lines.join("\n");
   }
 
   if (tp.chatEnterTemplate && tp.hasFreshSignal) {
-    lines.push("**Action:** ENTER candidate (still you on MT5 — rare).");
+    lines.push("**Strong setup on paper — still your call on MT5.**");
+    lines.push("");
     lines.push(tp.chatEnterTemplate);
     return lines.join("\n");
   }
 
-  lines.push("**Action:** DO NOT ENTER NOW — wait.");
+  lines.push("**Do nothing for now.**");
   lines.push("");
 
-  const whys = [];
+  const plain = [];
   if (levels.inSupportZone) {
-    whys.push(`Near **support** ~$${levels.nearestSupport} (watch zone).`);
+    plain.push(`Price **~$${m5 ?? "?"}** is near **support ~$${levels.nearestSupport}**.`);
   } else if (levels.inResistanceZone) {
-    whys.push(`Near **resistance** ~$${levels.nearestResistance} (watch zone).`);
+    plain.push(`Price **~$${m5 ?? "?"}** is near **resistance ~$${levels.nearestResistance}**.`);
   } else {
-    whys.push("Not in a tight support/resistance band for a fade setup.");
+    plain.push(`Price **~$${m5 ?? "?"}** — not in a tight buy/sell zone.`);
   }
 
-  if (primary.reason) {
-    whys.push(`Trade math blocked: ${primary.reason}.`);
+  const block = simplifyPlanBlockReason(primary.reason);
+  if (block) {
+    plain.push(block);
   } else if (!primary.ok && primary.meetsMinRR === false) {
-    whys.push("R:R to TP1 does not meet minimum.");
-  } else if (!levels.consider?.shortAtResistance && !levels.consider?.longAtSupport) {
-    whys.push("No short-at-resistance / long-at-support flag this poll.");
+    plain.push("Reward vs risk is too small for a plan.");
   }
 
   if (levels.breakoutAboveResistance) {
-    whys.push("Breakout / bull impulse — do not blindly short the top.");
+    plain.push("Price is pushing above resistance — do not sell just because it looks “high”.");
   }
 
-  const m15Bias = levels.consider?.m15Bias ?? "?";
-  whys.push(`M15 bias: **${m15Bias}**.`);
+  const bias = levels.consider?.m15Bias;
+  if (bias === "bull") plain.push("15m trend: **up**.");
+  else if (bias === "bear") plain.push("15m trend: **down**.");
 
-  lines.push("**Why:**");
-  for (const w of whys) lines.push(`- ${w}`);
-
-  lines.push("");
-  lines.push("**Price:**");
-  lines.push(
-    `- M5 ~$${m5 ?? "?"} · RSI ${rsi ?? "?"} · ADX ${adx ?? "?"} · spread ${spread ?? "?"} pts`,
-  );
-  lines.push(`- M15 ~$${m15 ?? "?"} · ADX ${ctx.m15?.adx ?? "?"}`);
-  lines.push(
-    `- Nearest S **$${levels.nearestSupport ?? "?"}** · R **$${levels.nearestResistance ?? "?"}**`,
-  );
+  lines.push(plain.join(" "));
 
   lines.push("");
-  lines.push("**When to reconsider:**");
-  lines.push(`- Next **5m close** ~**${next5mUtcIso(ts)}** (new structure + possible signal bar).`);
-  lines.push("- Enter only after a **WATCH ONLY** message with entry / stop / TP — not on silence.");
+  lines.push(`5m RSI ${rsi ?? "?"} · ADX ${adx ?? "?"} · spread ${spread ?? "?"} pts`);
+  lines.push(`Support **$${levels.nearestSupport ?? "?"}** · Resistance **$${levels.nearestResistance ?? "?"}**`);
+
+  lines.push("");
+  lines.push(`Next 5m candle close: **~${next5mUtcIso(ts)}**.`);
+  lines.push("Trade only after a **Get ready** alert with zone, stop, and target.");
+
   if (news.nextHighImpact?.title && news.nextHighImpact.minutesUntil != null) {
     const m = news.nextHighImpact.minutesUntil;
-    lines.push(
-      `- Calendar: **${news.nextHighImpact.title}** ${m >= 0 ? `in ~${m} min` : "recently"} — ${news.inBlackout ? "in blackout window" : "note size"}.`,
-    );
-  }
-
-  const showPlan = (p, label) => {
-    if (p?.entryLow == null || p?.stop == null) return;
-    const dir = p.direction === "short" ? "Short" : "Long";
-    lines.push(
-      `- ${label} ${dir} band $${p.entryLow}–$${p.entryHigh ?? p.entryLow} · stop $${p.stop}${p.tp1 ? ` · TP1 $${p.tp1}` : ""}`,
-    );
-  };
-
-  if (primary.entryLow != null || tp.long?.ok || tp.short?.ok) {
-    lines.push("");
-    lines.push("**If setup improves (math only, not enter now):**");
-    if (primary.ok) showPlan(primary, "Primary");
-    else if (primary.reason) showPlan(primary, "Blocked primary");
-    if (levels.inSupportZone && tp.long?.ok && primary.direction !== "long") {
-      showPlan(tp.long, "Long at support");
-    }
-    if (levels.inResistanceZone && tp.short?.ok && primary.direction !== "short") {
-      showPlan(tp.short, "Short at resistance");
+    if (news.inBlackout) {
+      lines.push(`News blackout: **${news.nextHighImpact.title}** — avoid new trades.`);
+    } else if (m >= 0 && m < 24 * 60) {
+      lines.push(`Upcoming news: **${news.nextHighImpact.title}** in ~${m} min — size carefully.`);
     }
   }
 

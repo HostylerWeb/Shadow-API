@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import { getContextPath } from "./xau-store.js";
 import { sendNtfy, showNtfySetup } from "./xau-ntfy.mjs";
+import { formatWatchCancelledNtfy, formatWatchNtfy } from "./xau-user-messages.mjs";
 
 function readContext() {
   const p = getContextPath();
@@ -16,10 +17,11 @@ function collectAlerts(ctx) {
   const out = [];
 
   if (ctx.watchRevoked?.notify && ctx.watchRevoked?.chatDoNotEnter) {
+    const prev = ctx.watchRevoked.previous ?? {};
     out.push({
-      eventKey: `revoke:${ctx.watchRevoked.revokedAt}:${ctx.watchRevoked.previous?.direction || "?"}`,
-      title: "XAU - stand down",
-      body: ctx.watchRevoked.chatDoNotEnter,
+      eventKey: `revoke:${ctx.watchRevoked.revokedAt}:${prev.direction || "?"}`,
+      title: "XAU: Alert cancelled",
+      body: formatWatchCancelledNtfy(prev),
       priority: "high",
       tags: "octagonal_sign",
     });
@@ -27,13 +29,10 @@ function collectAlerts(ctx) {
 
   if (ctx.newWatchIssued && ctx.activeWatch?.active) {
     const aw = ctx.activeWatch;
-    const body =
-      ctx.tradePlan?.chatDraft ||
-      `WATCH ONLY ${aw.direction?.toUpperCase() || ""} band $${aw.entryLow}–$${aw.entryHigh} stop $${aw.stop} TP1 $${aw.tp1}`;
     out.push({
       eventKey: `watch:${aw.issuedAt}:${aw.fingerprint?.direction}:${aw.fingerprint?.stop}`,
-      title: "XAU - WATCH ONLY (prepare)",
-      body,
+      title: "XAU: Get ready",
+      body: formatWatchNtfy(aw),
       priority: "high",
       tags: "chart_with_upwards_trend",
     });
@@ -42,8 +41,8 @@ function collectAlerts(ctx) {
   if (ctx.ok === false) {
     out.push({
       eventKey: `bridge:${ctx.ts || "err"}`,
-      title: "XAU - bridge error",
-      body: "Chrome extension / TradingView tabs — check bridge.",
+      title: "XAU: Charts not connected",
+      body: "Open 5m + 15m tabs and check the Chrome extension / bridge.",
       priority: "high",
       tags: "warning",
     });
@@ -56,14 +55,14 @@ function collectAlerts(ctx) {
 export async function pushEnterEvaluation(ev) {
   if (ev.decision !== "ENTER") return { ok: true, skipped: true };
   const parts = [
-    ev.reason || "All hard filters passed — recommendation only, you execute on MT5.",
-    ev.entryLow != null ? `Entry ~$${ev.entryLow}` : null,
+    ev.reason || "Review the chart — agent suggests entry; you trade on MT5.",
+    ev.entryLow != null ? `Zone ~$${ev.entryLow}` : null,
     ev.stop != null ? `Stop $${ev.stop}` : null,
-    ev.tp1 != null ? `TP1 $${ev.tp1}` : null,
+    ev.tp1 != null ? `Target $${ev.tp1}` : null,
   ].filter(Boolean);
   return sendNtfy({
     eventKey: `enter:${ev.signalId || ev.reason}`,
-    title: "XAU - ENTER (review now)",
+    title: "XAU: Possible entry — review",
     body: parts.join(" · "),
     priority: "urgent",
     tags: "rotating_light",
@@ -76,11 +75,70 @@ async function main() {
     return;
   }
 
+  if (process.argv.includes("--test-all")) {
+    const t = Date.now();
+    const samples = [
+      {
+        eventKey: `test-all:ok:${t}`,
+        title: "XAU: Test OK",
+        body: "If you see this, phone alerts are working.",
+        priority: "default",
+        tags: "white_check_mark",
+      },
+      {
+        eventKey: `test-all:ready:${t}`,
+        title: "XAU: Get ready",
+        body: formatWatchNtfy({
+          direction: "short",
+          entryLow: 4068.73,
+          entryHigh: 4071.84,
+          stop: 4072.64,
+          tp1: 4055.51,
+        }),
+        priority: "high",
+        tags: "chart_with_upwards_trend",
+      },
+      {
+        eventKey: `test-all:cancel:${t}`,
+        title: "XAU: Alert cancelled",
+        body: formatWatchCancelledNtfy({
+          direction: "short",
+          entryLow: 4068.73,
+          entryHigh: 4071.84,
+          tp1: 4055.51,
+        }),
+        priority: "high",
+        tags: "octagonal_sign",
+      },
+      {
+        eventKey: `test-all:enter:${t}`,
+        title: "XAU: Possible entry — review",
+        body: "Review the chart — agent suggests entry; you trade on MT5. · Zone ~$4055 · Stop $4054.2 · Target $4076",
+        priority: "urgent",
+        tags: "rotating_light",
+      },
+      {
+        eventKey: `test-all:bridge:${t}`,
+        title: "XAU: Charts not connected",
+        body: "Open 5m + 15m tabs and check the Chrome extension / bridge.",
+        priority: "high",
+        tags: "warning",
+      },
+    ];
+    const results = [];
+    for (const a of samples) {
+      results.push(await sendNtfy(a));
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    console.log(JSON.stringify({ ok: true, sent: results.length, results }));
+    return;
+  }
+
   if (process.argv.includes("--test")) {
     const r = await sendNtfy({
       eventKey: `test:${Date.now()}`,
-      title: "XAU - test ping",
-      body: "If you see this on your phone, ntfy is wired correctly.",
+      title: "XAU: Test OK",
+      body: "If you see this, phone alerts are working.",
       priority: "default",
       tags: "white_check_mark",
     });

@@ -24,8 +24,8 @@ Machine-readable log: \`signals.jsonl\` (same folder).
 
 | Label | Meaning |
 |-------|---------|
-| **DRAFT WATCH** | Prepare / limit zone — you decide on MT5 (not bot ENTER) |
-| **DO NOT ENTER** | Prior draft cancelled — do not chase old prices |
+| **Get ready** | Possible setup — you decide on MT5 |
+| **Cancelled** | Old alert is off — do not use those prices |
 
 ---
 
@@ -50,24 +50,21 @@ export function appendSignalEvent(event) {
 
   if (event.type === "watch") {
     const dir = event.direction === "short" ? "Short" : "Long";
-    appendJournalBlock(`${ts} — DRAFT WATCH (${dir})`, [
-      `- **Action:** Prepare — **${dir}** (you place the order on MT5)`,
-      `- **Entry range:** $${event.entryLow} – $${event.entryHigh}`,
-      `- **Target (TP1):** $${event.tp1 ?? "—"}`,
-      `- **Stop loss:** $${event.stop ?? "—"}`,
-      `- **Take profit (TP2):** $${event.tp2 ?? "—"}`,
-      event.netRRtp1 != null ? `- **Net R:R to TP1:** ~${event.netRRtp1}` : null,
-      event.mid != null ? `- **Mid at alert:** $${event.mid}` : null,
-      event.spread != null ? `- **Spread (pts):** ${event.spread}` : null,
-      `- **Note:** Math-only — not automated ENTER confirmation`,
+    appendJournalBlock(`${ts} — Get ready (${dir})`, [
+      `- **${dir}** — you place the order on MT5`,
+      `- Zone: $${event.entryLow} – $${event.entryHigh}`,
+      `- Target 1: $${event.tp1 ?? "—"}`,
+      `- Stop: $${event.stop ?? "—"}`,
+      event.tp2 != null ? `- Target 2: $${event.tp2}` : null,
+      event.netRRtp1 != null ? `- Reward vs risk (target 1): ~${event.netRRtp1}×` : null,
+      event.mid != null ? `- Price at alert: $${event.mid}` : null,
     ].filter(Boolean));
   } else if (event.type === "revoke") {
-    const dir = event.direction === "short" ? "Short" : "Long";
-    appendJournalBlock(`${ts} — DO NOT ENTER (cancelled ${dir})`, [
-      `- **Action:** Do **not** enter the prior draft; do not chase`,
-      `- **Was:** ${dir} $${event.entryLow} – $${event.entryHigh} → TP1 $${event.tp1 ?? "—"}`,
-      event.reasons?.length ? `- **Why:** ${event.reasons.join("; ")}` : null,
-      event.mid != null ? `- **Mid at cancel:** $${event.mid}` : null,
+    const dir = event.direction === "short" ? "Sell" : "Buy";
+    appendJournalBlock(`${ts} — Alert cancelled (${dir})`, [
+      `- Do **not** use the old zone`,
+      `- Was: ${dir} $${event.entryLow} – $${event.entryHigh} → target $${event.tp1 ?? "—"}`,
+      event.mid != null ? `- Price at cancel: $${event.mid}` : null,
     ].filter(Boolean));
   } else if (event.type === "enter") {
     const dir = event.direction === "short" ? "Short" : "Long";

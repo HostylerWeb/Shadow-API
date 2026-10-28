@@ -6,6 +6,7 @@
  */
 import fs from "node:fs";
 import { getContextPath } from "./xau-store.js";
+import { simplifyDataIssue } from "./xau-user-messages.mjs";
 
 function readContext() {
   const p = getContextPath();
@@ -29,11 +30,14 @@ if (ctx.watchRevoked?.notify && ctx.watchRevoked?.chatDoNotEnter) {
   lines.push(ctx.tradePlan.chatDraft);
   jsonOut.messages.push({ type: "watch", text: ctx.tradePlan.chatDraft });
 } else if (ctx.dataIntegrity?.ok === false && (ctx.isNew5mBar || ctx.isNew15mBar)) {
-  const msg = `**WAIT_DATA** — feed not decision-grade (${(ctx.dataIntegrity.issues || []).join("; ") || ctx.dataIntegrity.m5ArchiveNote || "integrity failed"}).`;
+  const detail = (ctx.dataIntegrity.issues || [])
+    .map(simplifyDataIssue)
+    .join(" ") || ctx.dataIntegrity.m5ArchiveNote || "Chart data not reliable.";
+  const msg = `**No trade — bad chart data.** ${detail}`;
   lines.push(msg);
   jsonOut.messages.push({ type: "wait_data", text: msg });
 } else if (ctx.ok === false) {
-  lines.push("**Bridge error** — check Chrome extension and TradingView tabs.");
+  lines.push("**No trade — charts not connected.** Check extension and 5m + 15m tabs.");
   jsonOut.messages.push({ type: "error", text: lines[0] });
 }
 

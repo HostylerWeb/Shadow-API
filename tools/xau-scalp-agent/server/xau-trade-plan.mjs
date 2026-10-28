@@ -2,6 +2,7 @@
  * Draft entry / stop / TP from closed bars + context.levels (not an MT5 order).
  */
 import { midPrice } from "./xau-signal.js";
+import { formatTradePlanPlain } from "./xau-user-messages.mjs";
 
 function round2(n) {
   if (n == null || !Number.isFinite(n)) return null;
@@ -105,9 +106,7 @@ function planLong({ closedBar, formingM5, levels, limits, signal }) {
     netRRtp1,
     meetsMinRR,
     spreadUsed: round2(spread),
-    note: meetsMinRR
-      ? "Math-only plan — not entry confirmation"
-      : "TP1 does not meet min net R:R — no ENTER",
+    note: meetsMinRR ? null : "Target 1 does not meet minimum reward vs risk.",
   };
 }
 
@@ -198,27 +197,13 @@ function planShort({ closedBar, formingM5, levels, limits, signal }) {
     netRRtp1,
     meetsMinRR,
     spreadUsed: round2(spread),
-    note: meetsMinRR
-      ? "Math-only plan — not entry confirmation"
-      : "TP1 does not meet min net R:R — no ENTER",
+    note: meetsMinRR ? null : "Target 1 does not meet minimum reward vs risk.",
   };
 }
 
 /** User-facing block — fixed field order. */
 export function formatTradePlanChat(plan, { draft = false } = {}) {
-  if (!plan || plan.entryLow == null || plan.entryHigh == null) return null;
-  const tag = draft ? "WATCH ONLY — not enter" : "Trade plan";
-  const dir = plan.direction === "short" ? "Short" : "Long";
-  const lines = [
-    `**${tag} (${dir})** — idea to monitor; **you** decide on MT5 (not an order).`,
-    `- **Entry range:** $${plan.entryLow} – $${plan.entryHigh}`,
-    `- **Target (TP1):** $${plan.tp1 ?? "—"}`,
-    `- **Stop loss:** $${plan.stop ?? "—"}`,
-    `- **Take profit (TP2):** $${plan.tp2 ?? "—"}`,
-  ];
-  if (plan.netRRtp1 != null) lines.push(`- **Net R:R to TP1:** ~${plan.netRRtp1}`);
-  if (plan.note) lines.push(`- **Note:** ${plan.note}`);
-  return lines.join("\n");
+  return formatTradePlanPlain(plan, { draft });
 }
 
 /**

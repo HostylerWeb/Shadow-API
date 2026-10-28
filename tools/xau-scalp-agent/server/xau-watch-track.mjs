@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getStateDir } from "./xau-store-paths.js";
 import { appendSignalEvent } from "./xau-signal-log.mjs";
+import { formatWatchCancelledChat } from "./xau-user-messages.mjs";
 
 function numEnv(name, fallback) {
   const v = process.env[name];
@@ -111,17 +112,12 @@ function leftSrZoneForWatch(levels, direction) {
 }
 
 function formatDoNotEnter(prev) {
-  const dir = prev.direction === "short" ? "Short" : "Long";
-  const entry =
-    prev.entryLow != null && prev.entryHigh != null
-      ? `$${prev.entryLow} – $${prev.entryHigh}`
-      : "prior range";
-  const tp1 = prev.tp1 != null ? `$${prev.tp1}` : "prior TP1";
-  const why = (prev.revokeReasons || []).join("; ") || "conditions changed";
-  return (
-    `**Stand down** — prior **${dir}** watch (${entry} → TP1 ${tp1}) is **off**. ` +
-    `Do **not** open or re-open that trade (${why}). Next **new** watch only after cooldown / fresh setup.`
-  );
+  return formatWatchCancelledChat({
+    direction: prev.direction,
+    entryLow: prev.entryLow,
+    entryHigh: prev.entryHigh,
+    tp1: prev.tp1,
+  });
 }
 
 function issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone }) {
