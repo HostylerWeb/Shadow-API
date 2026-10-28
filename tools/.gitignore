@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Secrets and local config (never commit)
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# Runtime state (lives in ~/.local/state/xau-scalp-agent/)
+**/ntfy-config.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/

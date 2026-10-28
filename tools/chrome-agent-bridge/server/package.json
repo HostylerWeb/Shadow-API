@@ -1,0 +1,17 @@
+{
+  "name": "@shadowapi/chrome-agent-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "chrome-agent-bridge": "./mcp.js"
+  },
+  "scripts": {
+    "start": "node bridge.js",
+    "mcp": "node mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ws": "^8.18.0"
+  }
+}

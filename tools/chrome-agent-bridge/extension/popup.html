@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 12px;
+        min-width: 220px;
+        font-size: 13px;
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+      }
+      .on {
+        background: #16a34a;
+      }
+      .off {
+        background: #dc2626;
+      }
+      code {
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <p><span id="dot" class="dot off"></span><span id="status">Checking…</span></p>
+    <p id="version" style="font-size:11px;color:#666"></p>
+    <p id="err" style="font-size:11px;color:#b91c1c"></p>
+    <p class="muted">Health: <code>http://127.0.0.1:17320/health</code></p>
+    <p class="muted">Bridge: <code>systemctl --user start chrome-agent-bridge</code></p>
+    <script src="popup.js"></script>
+  </body>
+</html>

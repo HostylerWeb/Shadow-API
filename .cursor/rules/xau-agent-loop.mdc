@@ -1,0 +1,18 @@
+---
+description: When AGENT_LOOP_TICK_xau fires, follow M15/M5 protocol with hard filters before score.
+globs:
+alwaysApply: true
+---
+
+# XAU agent loop tick
+
+On **`AGENT_LOOP_TICK_xau`** (or embedded tick prompt):
+
+1. Read `AGENT-LOOP-PROMPT.md` (mandatory decision protocol) and `XAU-SCALP-STUDY.md` §3.4 definitions.
+2. Read `context.json` (`signal`, `limits`, **`dataIntegrity`**, **`levels`**, **`tradePlan`**, **`watchRevoked`**, **`news`**), closed `bars-*.jsonl`, `latest.json` (forming only).
+3. **Hard filters first** — **`tradePlan.meetsMinRR` / `primary.ok` never ENTER**. **`dataIntegrity.ok`** required. S/R from **`context.levels`** only.
+4. **ENTER** only if filters pass, score ≥ `limits.minAlignmentScore`, fresh **`signal`**, not stale.
+5. On **`isNew5mBar`**, append **`evaluations.jsonl`** via `xau-log-evaluation.mjs`.
+6. **Every tick:** paste **`node …/xau-agent-brief.mjs`** output (or terminal **`XAU_AGENT_BRIEF_*`** block) — Action / Why / When for the user. On **`isNew5mBar`**, still log **`evaluations.jsonl`**. On watch/revoke/ENTER, brief + protocol apply.
+
+Do not restart the loop unless asked.

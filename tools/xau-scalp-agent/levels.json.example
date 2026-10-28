@@ -1,0 +1,5 @@
+{
+  "supports": [],
+  "resistances": [],
+  "_comment": "Optional manual overrides. Auto session levels come from 5m Pine XAUAGENT → levels-auto.json"
+}

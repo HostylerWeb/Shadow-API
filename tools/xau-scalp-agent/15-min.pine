@@ -1,0 +1,211 @@
+
+ //@version=6
+indicator("ADX + ATR + Trading Sessions", shorttitle="ADX+ATR", overlay=false, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ADX SETTINGS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_ADX = "ADX Settings"
+int adxlen = input.int(14, "ADX Smoothing", minval=1, group=GROUP_ADX, tooltip="The time period used to calculate ADX smoothing.")
+int dilen = input.int(14, "DI Length", minval=1, group=GROUP_ADX, tooltip="The time period used to calculate the Directional Indicator.")
+
+dirmov(simple int len) =>
+    float up = ta.change(high)
+    float down = -ta.change(low)
+    float plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
+    float minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+    float truerange = ta.rma(ta.tr, len)
+    float plus = fixnan(100 * ta.rma(plusDM, len) / truerange)
+    float minus = fixnan(100 * ta.rma(minusDM, len) / truerange)
+    [plus, minus]
+
+calcAdx(simple int diLength, simple int smoothingLength) =>
+    [plus, minus] = dirmov(diLength)
+    float diSum = plus + minus
+    100 * ta.rma(math.abs(plus - minus) / (diSum == 0 ? 1 : diSum), smoothingLength)
+
+float adxValue = calcAdx(dilen, adxlen)
+plot(adxValue, title="ADX", color=color.red, linewidth=2)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ATR SETTINGS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_ATR = "ATR Settings"
+int atrLength = input.int(14, "Length", minval=1, group=GROUP_ATR)
+string atrSmoothing = input.string("RMA", "Smoothing", options=["RMA", "SMA", "EMA", "WMA"], group=GROUP_ATR)
+
+ma_function(float source, simple int length) =>
+    switch atrSmoothing
+        "RMA" => ta.rma(source, length)
+        "SMA" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        => ta.wma(source, length)
+
+float atrValue = ma_function(ta.tr(true), atrLength)
+plot(atrValue, title="ATR", color=color.new(#B71C1C, 0), linewidth=2)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SESSION DISPLAY SETTINGS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_DISPLAY = "Session Display"
+bool showSessionNames = input.bool(true, "Show session names", group=GROUP_DISPLAY)
+bool showSessionOC = input.bool(true, "Draw session open and close lines", group=GROUP_DISPLAY)
+bool showSessionTickRange = input.bool(true, "Show tick range for each session", group=GROUP_DISPLAY)
+bool showSessionAverage = input.bool(true, "Show average price per session", group=GROUP_DISPLAY)
+
+const string TZ_TOOLTIP = "Use GMT notation (e.g., GMT-5) or an IANA timezone (e.g., America/New_York). IANA timezones account for daylight saving changes."
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TOKYO SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_TOKYO = "First Session"
+bool showTokyo = input.bool(true, "Show session", group=GROUP_TOKYO)
+string tokyoName = input.string("Tokyo", "Displayed name", group=GROUP_TOKYO, active=showTokyo)
+string tokyoTime = input.session("0900-1500", "Session time", group=GROUP_TOKYO, active=showTokyo)
+string tokyoTZ = input.string("Asia/Tokyo", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_TOKYO, active=showTokyo)
+color tokyoColor = input.color(color.new(#2962FF, 85), "Session color", group=GROUP_TOKYO, active=showTokyo)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// LONDON SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_LONDON = "Second session"
+bool showLondon = input.bool(true, "Show session", group=GROUP_LONDON)
+string londonName = input.string("London", "Displayed name", group=GROUP_LONDON, active=showLondon)
+string londonTime = input.session("0830-1630", "Session time", group=GROUP_LONDON, active=showLondon)
+string londonTZ = input.string("Europe/London", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_LONDON, active=showLondon)
+color londonColor = input.color(color.new(#FF9800, 85), "Session color", group=GROUP_LONDON, active=showLondon)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// NEW YORK SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+string GROUP_NY = "Third session"
+bool showNY = input.bool(true, "Show session", group=GROUP_NY)
+string nyName = input.string("New York", "Displayed name", group=GROUP_NY, active=showNY)
+string nyTime = input.session("0930-1600", "Session time", group=GROUP_NY, active=showNY)
+string nyTZ = input.string("America/New_York", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_NY, active=showNY)
+color nyColor = input.color(color.new(#089981, 85), "Session color", group=GROUP_NY, active=showNY)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SESSION TYPES
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type SessionDisplay
+    box sessionBox
+    label sessionLabel
+    line openLine
+    line avgLine
+    line closeLine
+    float sumClose
+    int numOfBars
+
+type SessionInfo
+    color sessionColor
+    string name
+    string session
+    string timezone
+    SessionDisplay active = na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SESSION LABEL
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+method setName(SessionDisplay this, string name) =>
+    string boxText = ""
+    if showSessionTickRange
+        boxText += "Range: " + str.tostring((this.sessionBox.get_top() - this.sessionBox.get_bottom()) / syminfo.mintick, "#.##") + " ticks"
+    if showSessionAverage
+        boxText += (boxText == "" ? "" : "\n") + "Avg: " + str.tostring(this.sumClose / this.numOfBars, format.mintick)
+    if showSessionNames
+        boxText += (boxText == "" ? "" : "\n") + name
+    this.sessionLabel.set_y(this.sessionBox.get_bottom())
+    this.sessionLabel.set_text(boxText)
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CREATE SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+method createSessionDisplay(SessionInfo this) =>
+    color boxColor = this.sessionColor
+    color opaqueColor = color.new(boxColor, 0)
+
+    box sessionBox = box.new(left=bar_index, top=high, right=bar_index, bottom=low, bgcolor=boxColor, border_color=na, force_overlay=true)
+    label sessionLabel = label.new(x=bar_index, y=low, text="", style=label.style_label_upper_left, textalign=text.align_left, textcolor=opaqueColor, color=color(na), force_overlay=true)
+
+    line openLine = na
+    line closeLine = na
+    line avgLine = na
+
+    if showSessionOC
+        openLine := line.new(x1=bar_index, y1=open, x2=bar_index, y2=open, color=opaqueColor, style=line.style_dashed, width=1, force_overlay=true)
+        closeLine := line.new(x1=bar_index, y1=close, x2=bar_index, y2=close, color=opaqueColor, style=line.style_dashed, width=1, force_overlay=true)
+        linefill.new(openLine, closeLine, boxColor)
+
+    if showSessionAverage
+        avgLine := line.new(x1=bar_index, y1=close, x2=bar_index, y2=close, style=line.style_dotted, width=2, color=opaqueColor, force_overlay=true)
+
+    SessionDisplay dis = SessionDisplay.new(sessionBox, sessionLabel, openLine, avgLine, closeLine, close, 1)
+    dis.setName(this.name)
+    this.active := dis
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// UPDATE SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+method updateSessionDisplay(SessionInfo this) =>
+    SessionDisplay dis = this.active
+    dis.sumClose += close
+    dis.numOfBars += 1
+
+    dis.sessionBox.set_top(math.max(dis.sessionBox.get_top(), high))
+    dis.sessionBox.set_bottom(math.min(dis.sessionBox.get_bottom(), low))
+    dis.sessionBox.set_right(bar_index)
+
+    if showSessionOC and not na(dis.openLine) and not na(dis.closeLine)
+        dis.openLine.set_x2(bar_index)
+        dis.closeLine.set_x2(bar_index)
+        dis.closeLine.set_y1(close)
+        dis.closeLine.set_y2(close)
+
+    if showSessionAverage and not na(dis.avgLine)
+        float avg = dis.sumClose / dis.numOfBars
+        dis.avgLine.set_x2(bar_index)
+        dis.avgLine.set_y1(avg)
+        dis.avgLine.set_y2(avg)
+
+    dis.setName(this.name)
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SESSION STATE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+method update(SessionInfo this) =>
+    bool inSession = not na(time(timeframe.period, this.session, this.timezone))
+    bool newDay = timeframe.change("1D")
+
+    if inSession
+        if na(this.active) or newDay
+            this.createSessionDisplay()
+        else
+            this.updateSessionDisplay()
+        0
+    else
+        if not na(this.active)
+            this.active := na
+        0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// RUN SESSIONS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if timeframe.isdwm
+    runtime.error("This indicator can only be used on intraday timeframes.")
+
+var array<SessionInfo> sessionInfos = array.new<SessionInfo>()
+
+if barstate.isfirst
+    if showTokyo
+        sessionInfos.push(SessionInfo.new(tokyoColor, tokyoName, tokyoTime, tokyoTZ))
+    if showLondon
+        sessionInfos.push(SessionInfo.new(londonColor, londonName, londonTime, londonTZ))
+    if showNY
+        sessionInfos.push(SessionInfo.new(nyColor, nyName, nyTime, nyTZ))
+
+for info in sessionInfos
+    info.update()

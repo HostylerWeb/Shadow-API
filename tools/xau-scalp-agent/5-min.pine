@@ -1,0 +1,507 @@
+
+ //@version=6
+indicator("VWAP + RSI + ATR + ADX + EMA + Sessions", shorttitle="VWAP RSI ADX EMA", overlay=false, max_bars_back=500, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 1. VWAP
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+VWAP_GROUP = "VWAP Settings"
+
+vwapAnchor = input.string("Session", "Anchor Period", options=["Session", "Week", "Month", "Quarter", "Year"], group=VWAP_GROUP)
+vwapSource = input.source(hlc3, "Source", group=VWAP_GROUP)
+vwapOffset = input.int(0, "Offset", minval=0, group=VWAP_GROUP)
+
+showVWAP = input.bool(true, "Show VWAP", group=VWAP_GROUP)
+vwapColor = input.color(color.purple, "VWAP Color", group=VWAP_GROUP)
+vwapWidth = input.int(2, "VWAP Width", minval=1, maxval=5, group=VWAP_GROUP)
+
+BAND_GROUP = "VWAP Bands"
+
+bandMode = input.string("Standard Deviation", "Band Calculation", options=["Standard Deviation", "Percentage"], group=BAND_GROUP)
+
+showBand1 = input.bool(true, "Show Band 1", group=BAND_GROUP)
+bandMult1 = input.float(1.0, "Band 1 Multiplier", minval=0.0, step=0.5, group=BAND_GROUP)
+bandColor1 = input.color(color.green, "Band 1 Color", group=BAND_GROUP)
+
+showBand2 = input.bool(false, "Show Band 2", group=BAND_GROUP)
+bandMult2 = input.float(2.0, "Band 2 Multiplier", minval=0.0, step=0.5, group=BAND_GROUP)
+bandColor2 = input.color(color.orange, "Band 2 Color", group=BAND_GROUP)
+
+showBand3 = input.bool(false, "Show Band 3", group=BAND_GROUP)
+bandMult3 = input.float(3.0, "Band 3 Multiplier", minval=0.0, step=0.5, group=BAND_GROUP)
+bandColor3 = input.color(color.red, "Band 3 Color", group=BAND_GROUP)
+
+fillBands = input.bool(false, "Fill Band 1", group=BAND_GROUP)
+
+newAnchor = switch vwapAnchor
+    "Session" => timeframe.change("1D")
+    "Week" => timeframe.change("1W")
+    "Month" => timeframe.change("1M")
+    "Quarter" => timeframe.change("3M")
+    "Year" => timeframe.change("12M")
+    => timeframe.change("1D")
+
+var float cumulativePV = 0.0
+var float cumulativeVolume = 0.0
+var float cumulativeP2V = 0.0
+
+if barstate.isfirst or newAnchor
+    cumulativePV := vwapSource * volume
+    cumulativeVolume := volume
+    cumulativeP2V := vwapSource * vwapSource * volume
+else
+    cumulativePV += vwapSource * volume
+    cumulativeVolume += volume
+    cumulativeP2V += vwapSource * vwapSource * volume
+
+vwapValue = cumulativeVolume > 0 ? cumulativePV / cumulativeVolume : na
+variance = cumulativeVolume > 0 ? math.max(cumulativeP2V / cumulativeVolume - vwapValue * vwapValue, 0.0) : na
+stDev = math.sqrt(variance)
+
+bandDistance = bandMode == "Standard Deviation" ? stDev : vwapValue * 0.01
+
+upper1 = vwapValue + bandDistance * bandMult1
+lower1 = vwapValue - bandDistance * bandMult1
+upper2 = vwapValue + bandDistance * bandMult2
+lower2 = vwapValue - bandDistance * bandMult2
+upper3 = vwapValue + bandDistance * bandMult3
+lower3 = vwapValue - bandDistance * bandMult3
+
+plot(showVWAP ? vwapValue : na, "VWAP", color=vwapColor, linewidth=vwapWidth, offset=vwapOffset, force_overlay=true)
+
+pU1 = plot(showBand1 ? upper1 : na, "VWAP Upper Band 1", color=bandColor1, offset=vwapOffset, force_overlay=true)
+pL1 = plot(showBand1 ? lower1 : na, "VWAP Lower Band 1", color=bandColor1, offset=vwapOffset, force_overlay=true)
+
+plot(showBand2 ? upper2 : na, "VWAP Upper Band 2", color=bandColor2, offset=vwapOffset, force_overlay=true)
+plot(showBand2 ? lower2 : na, "VWAP Lower Band 2", color=bandColor2, offset=vwapOffset, force_overlay=true)
+
+plot(showBand3 ? upper3 : na, "VWAP Upper Band 3", color=bandColor3, offset=vwapOffset, force_overlay=true)
+plot(showBand3 ? lower3 : na, "VWAP Lower Band 3", color=bandColor3, offset=vwapOffset, force_overlay=true)
+
+fill(pU1, pL1, color=fillBands and showBand1 ? color.new(bandColor1, 90) : na, title="VWAP Band 1 Fill")
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2. RSI
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RSI_GROUP = "RSI Settings"
+
+rsiLength = input.int(14, "RSI Length", minval=1, group=RSI_GROUP)
+rsiSource = input.source(close, "RSI Source", group=RSI_GROUP)
+rsiOB = input.int(70, "Overbought", minval=50, maxval=100, group=RSI_GROUP)
+rsiOS = input.int(30, "Oversold", minval=0, maxval=50, group=RSI_GROUP)
+
+showRSI = input.bool(true, "Show RSI", group=RSI_GROUP)
+rsiColor = input.color(color.rgb(126, 87, 194), "RSI Color", group=RSI_GROUP)
+
+rsiValue = ta.rsi(rsiSource, rsiLength)
+
+plot(showRSI ? rsiValue : na, "RSI", color=rsiColor, linewidth=2)
+obLine = hline(70, "RSI Overbought Reference", color=color.new(color.red, 100))
+midLine = hline(50, "RSI Middle", color=color.gray)
+osLine = hline(30, "RSI Oversold Reference", color=color.new(color.green, 100))
+
+// Use configurable levels for the actual RSI thresholds.
+plot(showRSI ? rsiOB : na, "RSI Overbought", color=color.red)
+plot(showRSI ? rsiOS : na, "RSI Oversold", color=color.green)
+
+// RSI smoothing
+RSI_MA_GROUP = "RSI Smoothing"
+
+rsiMaType = input.string("SMA", "Smoothing Type", options=["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=RSI_MA_GROUP)
+rsiMaLength = input.int(14, "Smoothing Length", minval=1, group=RSI_MA_GROUP)
+rsiBBMult = input.float(2.0, "BB Standard Deviation", minval=0.1, maxval=10, step=0.1, group=RSI_MA_GROUP)
+
+rsiMA(float src, int length, string maType) =>
+    switch maType
+        "SMA" => ta.sma(src, length)
+        "SMA + Bollinger Bands" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "SMMA (RMA)" => ta.rma(src, length)
+        "WMA" => ta.wma(src, length)
+        "VWMA" => ta.vwma(src, length)
+        => na
+
+rsiSmooth = rsiMA(rsiValue, rsiMaLength, rsiMaType)
+showRSISmooth = rsiMaType != "None"
+
+plot(showRSI and showRSISmooth ? rsiSmooth : na, "RSI Moving Average", color=color.yellow)
+
+rsiBBActive = rsiMaType == "SMA + Bollinger Bands"
+rsiBBDev = ta.stdev(rsiValue, rsiMaLength) * rsiBBMult
+rsiBBUpper = rsiSmooth + rsiBBDev
+rsiBBLower = rsiSmooth - rsiBBDev
+
+pRSIBBU = plot(showRSI and rsiBBActive ? rsiBBUpper : na, "RSI BB Upper", color=color.green)
+pRSIBBL = plot(showRSI and rsiBBActive ? rsiBBLower : na, "RSI BB Lower", color=color.green)
+fill(pRSIBBU, pRSIBBL, color=rsiBBActive ? color.new(color.green, 90) : na, title="RSI Bollinger Band Fill")
+
+// RSI divergence
+DIV_GROUP = "RSI Divergence"
+
+showDivergence = input.bool(false, "Show Divergences", group=DIV_GROUP)
+pivotRight = input.int(5, "Pivot Right Bars", minval=1, group=DIV_GROUP)
+pivotLeft = input.int(5, "Pivot Left Bars", minval=1, group=DIV_GROUP)
+rangeMax = input.int(60, "Maximum Pivot Range", minval=1, group=DIV_GROUP)
+rangeMin = input.int(5, "Minimum Pivot Range", minval=1, group=DIV_GROUP)
+
+pivotLow = ta.pivotlow(rsiValue, pivotLeft, pivotRight)
+pivotHigh = ta.pivothigh(rsiValue, pivotLeft, pivotRight)
+
+rsiRangeValid(bool condition) =>
+    barsAgo = ta.barssince(condition)
+    rangeMin <= barsAgo and barsAgo <= rangeMax
+
+priorPivotLow = not na(pivotLow)
+priorPivotHigh = not na(pivotHigh)
+
+inRangeLow = rsiRangeValid(priorPivotLow[1])
+inRangeHigh = rsiRangeValid(priorPivotHigh[1])
+
+rsiHigherLow = rsiValue[pivotRight] > ta.valuewhen(priorPivotLow, rsiValue[pivotRight], 1) and inRangeLow
+priceLowerLow = low[pivotRight] < ta.valuewhen(priorPivotLow, low[pivotRight], 1)
+bullDiv = showDivergence and priorPivotLow and rsiHigherLow and priceLowerLow
+
+rsiLowerHigh = rsiValue[pivotRight] < ta.valuewhen(priorPivotHigh, rsiValue[pivotRight], 1) and inRangeHigh
+priceHigherHigh = high[pivotRight] > ta.valuewhen(priorPivotHigh, high[pivotRight], 1)
+bearDiv = showDivergence and priorPivotHigh and rsiLowerHigh and priceHigherHigh
+
+plotshape(bullDiv ? rsiValue[pivotRight] : na, title="Bullish RSI Divergence", style=shape.labelup, location=location.absolute, color=color.green, text="Bull", textcolor=color.white, offset=-pivotRight)
+plotshape(bearDiv ? rsiValue[pivotRight] : na, title="Bearish RSI Divergence", style=shape.labeldown, location=location.absolute, color=color.red, text="Bear", textcolor=color.white, offset=-pivotRight)
+
+alertcondition(bullDiv, title="Bullish RSI Divergence", message="Bullish RSI divergence detected")
+alertcondition(bearDiv, title="Bearish RSI Divergence", message="Bearish RSI divergence detected")
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3. ADX
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GROUP_ADX = "ADX Settings"
+
+adxlen = input.int(14, "ADX Smoothing", minval=1, group=GROUP_ADX, tooltip="The time period used to calculate ADX smoothing.")
+dilen = input.int(14, "DI Length", minval=1, group=GROUP_ADX, tooltip="The time period used to calculate the Directional Indicator.")
+showADX = input.bool(true, "Show ADX", group=GROUP_ADX)
+adxColor = input.color(color.red, "ADX Color", group=GROUP_ADX)
+showADXThreshold = input.bool(true, "Show ADX 20 Threshold", group=GROUP_ADX)
+
+dirmov(simple int len) =>
+    float up = ta.change(high)
+    float down = -ta.change(low)
+    float plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
+    float minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+    float truerange = ta.rma(ta.tr, len)
+    float plus = fixnan(100 * ta.rma(plusDM, len) / truerange)
+    float minus = fixnan(100 * ta.rma(minusDM, len) / truerange)
+    [plus, minus]
+
+calcAdx(simple int diLength, simple int smoothingLength) =>
+    [plus, minus] = dirmov(diLength)
+    float diSum = plus + minus
+    100 * ta.rma(math.abs(plus - minus) / (diSum == 0 ? 1 : diSum), smoothingLength)
+
+adxValue = calcAdx(dilen, adxlen)
+
+plot(showADX ? adxValue : na, title="ADX", color=adxColor, linewidth=2)
+plot(showADX and showADXThreshold ? 20 : na, title="ADX 20 Threshold", color=color.gray)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4. ATR
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ATR_GROUP = "ATR Settings"
+
+atrLength = input.int(14, "ATR Length", minval=1, group=ATR_GROUP)
+atrMaType = input.string("RMA", "ATR Smoothing", options=["RMA", "SMA", "EMA", "WMA"], group=ATR_GROUP)
+showATR = input.bool(true, "Show ATR Value", group=ATR_GROUP)
+
+atrMA(float src, simple int length, string maType) =>
+    switch maType
+        "SMA" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "WMA" => ta.wma(src, length)
+        => ta.rma(src, length)
+
+atrRaw = ta.tr(true)
+atrValue = atrMA(atrRaw, atrLength, atrMaType)
+
+plot(showATR ? atrValue : na, "ATR", color=color.blue, linewidth=2)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 5. EMA 20 / 50 / 100 / 200
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EMA_GROUP = "EMA Settings"
+
+emaLength20 = input.int(20, "EMA 20 Length", minval=1, group=EMA_GROUP)
+emaLength50 = input.int(50, "EMA 50 Length", minval=1, group=EMA_GROUP)
+emaLength100 = input.int(100, "EMA 100 Length", minval=1, group=EMA_GROUP)
+emaLength200 = input.int(200, "EMA 200 Length", minval=1, group=EMA_GROUP)
+
+emaColor20 = input.color(color.red, "EMA 20 Color", group=EMA_GROUP)
+emaColor50 = input.color(color.orange, "EMA 50 Color", group=EMA_GROUP)
+emaColor100 = input.color(color.aqua, "EMA 100 Color", group=EMA_GROUP)
+emaColor200 = input.color(color.blue, "EMA 200 Color", group=EMA_GROUP)
+
+ema20 = ta.ema(close, emaLength20)
+ema50 = ta.ema(close, emaLength50)
+ema100 = ta.ema(close, emaLength100)
+ema200 = ta.ema(close, emaLength200)
+
+plot(ema20, "EMA 20", color=emaColor20, linewidth=2, force_overlay=true)
+plot(ema50, "EMA 50", color=emaColor50, linewidth=2, force_overlay=true)
+plot(ema100, "EMA 100", color=emaColor100, linewidth=2, force_overlay=true)
+plot(ema200, "EMA 200", color=emaColor200, linewidth=2, force_overlay=true)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 6. SESSION DISPLAY SETTINGS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GROUP_DISPLAY = "Session Display"
+
+showSessionNames = input.bool(true, "Show session names", group=GROUP_DISPLAY)
+showSessionOC = input.bool(true, "Draw session open and close lines", group=GROUP_DISPLAY)
+showSessionTickRange = input.bool(true, "Show tick range for each session", group=GROUP_DISPLAY)
+showSessionAverage = input.bool(true, "Show average price per session", group=GROUP_DISPLAY)
+
+TZ_TOOLTIP = "Use GMT notation (e.g., GMT-5) or an IANA timezone (e.g., America/New_York). IANA timezones account for daylight saving changes."
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 7. TOKYO SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GROUP_TOKYO = "First Session"
+
+showTokyo = input.bool(true, "Show session", group=GROUP_TOKYO)
+tokyoName = input.string("Tokyo", "Displayed name", group=GROUP_TOKYO, active=showTokyo)
+tokyoTime = input.session("0900-1500", "Session time", group=GROUP_TOKYO, active=showTokyo)
+tokyoTZ = input.string("Asia/Tokyo", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_TOKYO, active=showTokyo)
+tokyoColor = input.color(color.new(#2962FF, 85), "Session color", group=GROUP_TOKYO, active=showTokyo)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 8. LONDON SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GROUP_LONDON = "Second Session"
+
+showLondon = input.bool(true, "Show session", group=GROUP_LONDON)
+londonName = input.string("London", "Displayed name", group=GROUP_LONDON, active=showLondon)
+londonTime = input.session("0830-1630", "Session time", group=GROUP_LONDON, active=showLondon)
+londonTZ = input.string("Europe/London", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_LONDON, active=showLondon)
+londonColor = input.color(color.new(#FF9800, 85), "Session color", group=GROUP_LONDON, active=showLondon)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 9. NEW YORK SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GROUP_NY = "Third Session"
+
+showNY = input.bool(true, "Show session", group=GROUP_NY)
+nyName = input.string("New York", "Displayed name", group=GROUP_NY, active=showNY)
+nyTime = input.session("0930-1600", "Session time", group=GROUP_NY, active=showNY)
+nyTZ = input.string("America/New_York", "Session timezone", tooltip=TZ_TOOLTIP, group=GROUP_NY, active=showNY)
+nyColor = input.color(color.new(#089981, 85), "Session color", group=GROUP_NY, active=showNY)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 10. SESSION TYPES
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+type SessionDisplay
+    box sessionBox
+    label sessionLabel
+    line openLine
+    line avgLine
+    line closeLine
+    float sumClose
+    int numOfBars
+
+type SessionInfo
+    color sessionColor
+    string name
+    string session
+    string timezone
+    SessionDisplay active = na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 11. SESSION LABEL
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+method setName(SessionDisplay this, string name) =>
+    string boxText = ""
+
+    if showSessionTickRange
+        boxText += "Range: " + str.tostring((this.sessionBox.get_top() - this.sessionBox.get_bottom()) / syminfo.mintick, "#.##") + " ticks"
+
+    if showSessionAverage
+        boxText += (boxText == "" ? "" : "\n") + "Avg: " + str.tostring(this.sumClose / this.numOfBars, format.mintick)
+
+    if showSessionNames
+        boxText += (boxText == "" ? "" : "\n") + name
+
+    this.sessionLabel.set_y(this.sessionBox.get_bottom())
+    this.sessionLabel.set_text(boxText)
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 12. CREATE SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+method createSessionDisplay(SessionInfo this) =>
+    color boxColor = this.sessionColor
+    color opaqueColor = color.new(boxColor, 0)
+
+    box sessionBox = box.new(left=bar_index, top=high, right=bar_index, bottom=low, bgcolor=boxColor, border_color=na, force_overlay=true)
+    label sessionLabel = label.new(x=bar_index, y=low, text="", style=label.style_label_upper_left, textalign=text.align_left, textcolor=opaqueColor, color=color(na), force_overlay=true)
+
+    line openLine = na
+    line closeLine = na
+    line avgLine = na
+
+    if showSessionOC
+        openLine := line.new(x1=bar_index, y1=open, x2=bar_index, y2=open, color=opaqueColor, style=line.style_dashed, width=1, force_overlay=true)
+        closeLine := line.new(x1=bar_index, y1=close, x2=bar_index, y2=close, color=opaqueColor, style=line.style_dashed, width=1, force_overlay=true)
+        linefill.new(openLine, closeLine, boxColor)
+
+    if showSessionAverage
+        avgLine := line.new(x1=bar_index, y1=close, x2=bar_index, y2=close, style=line.style_dotted, width=2, color=opaqueColor, force_overlay=true)
+
+    SessionDisplay dis = SessionDisplay.new(sessionBox, sessionLabel, openLine, avgLine, closeLine, close, 1)
+    dis.setName(this.name)
+    this.active := dis
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 13. UPDATE SESSION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+method updateSessionDisplay(SessionInfo this) =>
+    SessionDisplay dis = this.active
+
+    dis.sumClose += close
+    dis.numOfBars += 1
+
+    dis.sessionBox.set_top(math.max(dis.sessionBox.get_top(), high))
+    dis.sessionBox.set_bottom(math.min(dis.sessionBox.get_bottom(), low))
+    dis.sessionBox.set_right(bar_index)
+
+    if showSessionOC and not na(dis.openLine) and not na(dis.closeLine)
+        dis.openLine.set_x2(bar_index)
+        dis.closeLine.set_x2(bar_index)
+        dis.closeLine.set_y1(close)
+        dis.closeLine.set_y2(close)
+
+    if showSessionAverage and not na(dis.avgLine)
+        float avg = dis.sumClose / dis.numOfBars
+        dis.avgLine.set_x2(bar_index)
+        dis.avgLine.set_y1(avg)
+        dis.avgLine.set_y2(avg)
+
+    dis.setName(this.name)
+    0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 14. SESSION STATE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+method update(SessionInfo this) =>
+    bool inSession = not na(time(timeframe.period, this.session, this.timezone))
+    bool newDay = timeframe.change("1D")
+
+    if inSession
+        if na(this.active) or newDay
+            this.createSessionDisplay()
+        else
+            this.updateSessionDisplay()
+        0
+    else
+        if not na(this.active)
+            this.active := na
+        0
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 15. RUN SESSIONS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if timeframe.isdwm
+    runtime.error("This indicator can only be used on intraday timeframes.")
+
+var array<SessionInfo> sessionInfos = array.new<SessionInfo>()
+
+if barstate.isfirst
+    if showTokyo
+        sessionInfos.push(SessionInfo.new(tokyoColor, tokyoName, tokyoTime, tokyoTZ))
+    if showLondon
+        sessionInfos.push(SessionInfo.new(londonColor, londonName, londonTime, londonTZ))
+    if showNY
+        sessionInfos.push(SessionInfo.new(nyColor, nyName, nyTime, nyTZ))
+
+for info in sessionInfos
+    info.update()
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 16. AGENT FEED — session H/L + sweeps (parsed by xau-scalp-agent)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AGENT_GROUP = "Agent Feed (Chrome bridge)"
+showAgentFeed = input.bool(true, "Export XAUAGENT levels to data window", group=AGENT_GROUP)
+
+var float agentDayHi = na
+var float agentDayLo = na
+if timeframe.change("1D")
+    agentDayHi := high
+    agentDayLo := low
+else
+    agentDayHi := math.max(nz(agentDayHi, high), high)
+    agentDayLo := math.min(nz(agentDayLo, low), low)
+
+var float agentAsiaHi = na
+var float agentAsiaLo = na
+var float agentLonHi = na
+var float agentLonLo = na
+var float agentNYHi = na
+var float agentNYLo = na
+var float agentPrevAsiaHi = na
+var float agentPrevAsiaLo = na
+
+bool agentInTokyo = showTokyo and not na(time(timeframe.period, tokyoTime, tokyoTZ))
+bool agentInLondon = showLondon and not na(time(timeframe.period, londonTime, londonTZ))
+bool agentInNY = showNY and not na(time(timeframe.period, nyTime, nyTZ))
+
+if timeframe.change("1D")
+    agentAsiaHi := na
+    agentAsiaLo := na
+    agentLonHi := na
+    agentLonLo := na
+    agentNYHi := na
+    agentNYLo := na
+
+if agentInTokyo
+    agentAsiaHi := na(agentAsiaHi) ? high : math.max(agentAsiaHi, high)
+    agentAsiaLo := na(agentAsiaLo) ? low : math.min(agentAsiaLo, low)
+if agentInLondon
+    agentLonHi := na(agentLonHi) ? high : math.max(agentLonHi, high)
+    agentLonLo := na(agentLonLo) ? low : math.min(agentLonLo, low)
+if agentInNY
+    agentNYHi := na(agentNYHi) ? high : math.max(agentNYHi, high)
+    agentNYLo := na(agentNYLo) ? low : math.min(agentNYLo, low)
+
+if agentInTokyo[1] and not agentInTokyo
+    agentPrevAsiaHi := agentAsiaHi
+    agentPrevAsiaLo := agentAsiaLo
+
+float agentSwThr = nz(atrValue, syminfo.mintick * 10) * 0.1
+float agentRefHi = nz(agentPrevAsiaHi, agentDayHi)
+float agentRefLo = nz(agentPrevAsiaLo, agentDayLo)
+float agentSweepBear = showAgentFeed and barstate.isconfirmed and not na(agentRefHi) and high > agentRefHi + agentSwThr and close < agentRefHi ? 1.0 : 0.0
+float agentSweepBull = showAgentFeed and barstate.isconfirmed and not na(agentRefLo) and low < agentRefLo - agentSwThr and close > agentRefLo ? 1.0 : 0.0
+
+plot(showAgentFeed ? agentDayHi : na, "XAUAGENT DayHi", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentDayLo : na, "XAUAGENT DayLo", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentAsiaHi : na, "XAUAGENT AsiaHi", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentAsiaLo : na, "XAUAGENT AsiaLo", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentLonHi : na, "XAUAGENT LonHi", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentLonLo : na, "XAUAGENT LonLo", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentNYHi : na, "XAUAGENT NYHi", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentNYLo : na, "XAUAGENT NYLo", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentSweepBear : na, "XAUAGENT SweepBear", color=color.new(color.white, 100), display=display.status_line + display.data_window)
+plot(showAgentFeed ? agentSweepBull : na, "XAUAGENT SweepBull", color=color.new(color.white, 100), display=display.status_line + display.data_window)
