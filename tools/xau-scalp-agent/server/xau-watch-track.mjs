@@ -1,6 +1,11 @@
 /**
- * Tracks issued actionableWatch plans and revokes when conditions change
- * (user did not enter — we assume no MT5 fill feedback in v0).
+ * Full trade-idea lifecycle tracker:
+ * 1. ENTRY_OPEN ("Get ready"): Price is in the entry zone; user can enter.
+ * 2. HOLD_FAVORABLE ("Hold if in / don't chase if out"): Price moved in favor out of the entry zone.
+ *    We KEEP tracking the trade so the user gets alerted on Target 1, Stop, or Reversal!
+ * 3. REVERSAL_WARNING ("Warning — price turning against your trade"): Opposite setup, rejection/sweep,
+ *    or momentum + M15 trend turning against an open trade.
+ * 4. TP1_HIT / STOP_BROKEN: Final completion of the tracked idea.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +18,11 @@ function numEnv(name, fallback) {
   if (v == null || v === "") return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function round2(n) {
+  if (n == null || !Number.isFinite(Number(n))) return null;
+  return Math.round(Number(n) * 100) / 100;
 }
 
 function getActiveWatchPath() {
@@ -85,30 +95,8 @@ function fpEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Wider band before "left zone" revoke — stops ~$1 mid noise from prepare/stand-down spam. */
-function zoneExitHystUsd(levels) {
-  const z = levels?.zoneUsd ?? 1.4;
-  const env = numEnv("XAU_ZONE_EXIT_HYST_USD", NaN);
-  if (Number.isFinite(env)) return env;
-  return Math.max(0.55, z * 0.45);
-}
-
 function inSrZoneForWatch(levels) {
   return levels?.watch === true;
-}
-
-function leftSrZoneForWatch(levels, direction) {
-  const z = levels?.zoneUsd ?? 1.4;
-  const h = zoneExitHystUsd(levels);
-  if (direction === "short") {
-    const d = levels?.distResistanceUsd;
-    return d == null || d < 0 || d > z + h;
-  }
-  if (direction === "long") {
-    const d = levels?.distSupportUsd;
-    return d == null || d < 0 || d > z + h;
-  }
-  return !inSrZoneForWatch(levels);
 }
 
 function formatDoNotEnter(prev) {
@@ -116,13 +104,128 @@ function formatDoNotEnter(prev) {
     direction: prev.direction,
     entryLow: prev.entryLow,
     entryHigh: prev.entryHigh,
+    stop: prev.stop,
     tp1: prev.tp1,
+    tp2: prev.tp2,
+    mid: prev.mid,
+    eventType: prev.eventType,
+    adverseDetail: prev.adverseDetail,
+    revokeReasons: prev.revokeReasons,
   });
 }
 
+/**
+ * Check if price / momentum / structure is turning against an active trade idea.
+ * Returns { isReversing: boolean, detail: string|null }
+ */
+function detectAdverseReversal({ prev, mid, bestMid, levels, formingM5, isNew5mBar }) {
+  if (mid == null || !prev) return { isReversing: false, detail: null };
+  const dir = prev.direction;
+  const lo = Number(prev.entryLow);
+  const hi = Number(prev.entryHigh);
+  const m15Bias = levels?.consider?.m15Bias;
+  const rsi = formingM5?.rsi;
+  const m5BearCandle =
+    formingM5?.c != null && formingM5?.o != null && formingM5.c < formingM5.o - 0.35;
+  const m5BullCandle =
+    formingM5?.c != null && formingM5?.o != null && formingM5.c > formingM5.o + 0.35;
+
+  if (dir === "long") {
+    if (levels?.closedBar?.rejectionAtResistance && mid > hi) {
+      return {
+        isReversing: true,
+        detail: "5m printed a rejection candle at resistance against your Buy",
+      };
+    }
+    if (levels?.sources?.agentFeed?.sweepBear) {
+      return {
+        isReversing: true,
+        detail: "Bearish liquidity sweep detected against your Buy",
+      };
+    }
+    if (levels?.consider?.shortAtResistance) {
+      return {
+        isReversing: true,
+        detail: "Opposite Sell setup triggered at resistance",
+      };
+    }
+    const peak = bestMid != null ? Math.max(bestMid, mid) : mid;
+    const profitRun = peak - hi;
+    const pullbackFromPeak = peak - mid;
+    /** Ran at least +$1.8 above entry zone, then gave back >= $1.8 while M15 is bear or 5m momentum turns down. */
+    if (
+      profitRun >= 1.8 &&
+      pullbackFromPeak >= 1.8 &&
+      (m15Bias === "bear" || (m5BearCandle && rsi != null && rsi < 44))
+    ) {
+      return {
+        isReversing: true,
+        detail: `Pulled back from $${round2(peak)} to $${round2(mid)} with ${m15Bias === "bear" ? "15m trend down" : "weakening 5m momentum"}`,
+      };
+    }
+    /** Dropped below entry zone toward stop on a closed 5m bar or strong red candle. */
+    if (mid < lo - 0.35 && (isNew5mBar || (m5BearCandle && rsi != null && rsi < 42))) {
+      return {
+        isReversing: true,
+        detail: `Price broke below entry zone ($${lo}) to $${round2(mid)} toward stop ($${prev.stop})`,
+      };
+    }
+  }
+
+  if (dir === "short") {
+    if (levels?.closedBar?.bounceAtSupport && mid < lo) {
+      return {
+        isReversing: true,
+        detail: "5m printed a bounce candle at support against your Sell",
+      };
+    }
+    if (levels?.sources?.agentFeed?.sweepBull) {
+      return {
+        isReversing: true,
+        detail: "Bullish liquidity sweep detected against your Sell",
+      };
+    }
+    if (levels?.consider?.longAtSupport) {
+      return {
+        isReversing: true,
+        detail: "Opposite Buy setup triggered at support",
+      };
+    }
+    if (levels?.breakoutAboveResistance && mid > hi + 0.3) {
+      return {
+        isReversing: true,
+        detail: `Bullish breakout above resistance ($${hi}) against your Sell`,
+      };
+    }
+    const trough = bestMid != null ? Math.min(bestMid, mid) : mid;
+    const profitRun = lo - trough;
+    const bounceFromLow = mid - trough;
+    if (
+      profitRun >= 1.8 &&
+      bounceFromLow >= 1.8 &&
+      (m15Bias === "bull" || (m5BullCandle && rsi != null && rsi > 56))
+    ) {
+      return {
+        isReversing: true,
+        detail: `Bounced from $${round2(trough)} to $${round2(mid)} with ${m15Bias === "bull" ? "15m trend up" : "rising 5m momentum"}`,
+      };
+    }
+    if (mid > hi + 0.35 && (isNew5mBar || (m5BullCandle && rsi != null && rsi > 58))) {
+      return {
+        isReversing: true,
+        detail: `Price pushed above entry zone ($${hi}) to $${round2(mid)} toward stop ($${prev.stop})`,
+      };
+    }
+  }
+
+  return { isReversing: false, detail: null };
+}
+
 function issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone }) {
+  const mid = market?.mid ?? levels?.mid ?? null;
   const row = {
     active: true,
+    phase: "ENTRY_OPEN",
     issuedAt: ts,
     bucket5m,
     inZone,
@@ -132,6 +235,9 @@ function issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone }) {
     stop: fp.stop,
     tp1: fp.tp1,
     tp2: fp.tp2,
+    bestMid: mid,
+    holdNotified: false,
+    reversalWarned: false,
     fingerprint: fp,
     chatDraft: tradePlan.chatDraft ?? null,
   };
@@ -147,7 +253,7 @@ function issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone }) {
     tp1: fp.tp1,
     tp2: fp.tp2 ?? null,
     netRRtp1: primary?.netRRtp1 ?? null,
-    mid: market?.mid ?? levels?.mid ?? null,
+    mid,
     spread: market?.spread ?? null,
     m5Close: market?.m5Close ?? null,
     inResistanceZone: levels?.inResistanceZone ?? false,
@@ -156,9 +262,53 @@ function issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone }) {
   });
 }
 
+function buildUpdateEvent({ prev, ts, mid, market, eventType, reasons, adverseDetail = null }) {
+  const payload = {
+    notify: true,
+    eventType,
+    revokedAt: ts,
+    reasons,
+    adverseDetail,
+    mid,
+    previous: {
+      direction: prev.direction,
+      entryLow: prev.entryLow,
+      entryHigh: prev.entryHigh,
+      stop: prev.stop,
+      tp1: prev.tp1,
+      tp2: prev.tp2 ?? null,
+      issuedAt: prev.issuedAt,
+    },
+  };
+  payload.chatDoNotEnter = formatDoNotEnter({
+    ...prev,
+    mid,
+    eventType,
+    adverseDetail,
+    revokeReasons: reasons,
+  });
+  appendSignalEvent({
+    type: "revoke",
+    eventType,
+    ts,
+    direction: prev.direction,
+    entryLow: prev.entryLow,
+    entryHigh: prev.entryHigh,
+    stop: prev.stop,
+    tp1: prev.tp1,
+    tp2: prev.tp2 ?? null,
+    reasons,
+    adverseDetail,
+    mid,
+    spread: market?.spread ?? null,
+    chatDoNotEnter: payload.chatDoNotEnter,
+  });
+  return payload;
+}
+
 /**
- * @param {{ tradePlan: object, levels: object, isNew5mBar: boolean, bucket5m: number, ts: string, market?: object, dataIntegrity?: object }} input
- * @returns {{ watchRevoked: object|null, activeWatch: object|null, watchSuppressed: object|null }}
+ * @param {{ tradePlan: object, levels: object, isNew5mBar: boolean, bucket5m: number, ts: string, market?: object, dataIntegrity?: object, formingM5?: object }} input
+ * @returns {{ watchRevoked: object|null, activeWatch: object|null, watchSuppressed: object|null, newWatchIssued: boolean }}
  */
 export function updateWatchTracking({
   tradePlan,
@@ -168,6 +318,7 @@ export function updateWatchTracking({
   ts,
   market = null,
   dataIntegrity = null,
+  formingM5 = null,
 }) {
   const prev = readActiveWatch();
   let watchRevoked = null;
@@ -180,88 +331,133 @@ export function updateWatchTracking({
   const cooldownUntilMs = readCooldownUntilMs();
   const nowMs = new Date(ts).getTime();
   const inCooldown = cooldownUntilMs > nowMs;
+  const mid = market?.mid ?? levels?.mid ?? null;
 
-  if (prev?.active) {
-    const reasons = [];
+  if (prev?.active && dataOk && mid != null) {
+    const dir = prev.direction;
+    const lo = Number(prev.entryLow);
+    const hi = Number(prev.entryHigh);
+    const stop = Number(prev.stop);
+    const tp1 = Number(prev.tp1);
 
-    if (isNew5mBar && prev.bucket5m != null && bucket5m !== prev.bucket5m) {
-      reasons.push("new 5m bar closed");
-    }
-    if (!tradePlan?.actionableWatch) {
-      reasons.push("watch no longer actionable");
-    } else if (fp && prev.direction && fp.direction !== prev.direction) {
-      reasons.push(`direction flipped (${prev.direction} -> ${fp.direction})`);
-    }
-    const leftZone = leftSrZoneForWatch(levels, prev.direction);
-    if (prev.inZone && leftZone) {
-      reasons.push("price left the S/R zone");
-    }
+    const bestMid =
+      prev.bestMid == null
+        ? mid
+        : dir === "long"
+          ? Math.max(prev.bestMid, mid)
+          : Math.min(prev.bestMid, mid);
 
-    if (reasons.length > 0) {
-      watchRevoked = {
-        notify: true,
-        revokedAt: ts,
-        reasons,
-        previous: {
-          direction: prev.direction,
-          entryLow: prev.entryLow,
-          entryHigh: prev.entryHigh,
-          stop: prev.stop,
-          tp1: prev.tp1,
-          tp2: prev.tp2 ?? null,
-          issuedAt: prev.issuedAt,
-        },
-        chatDoNotEnter: formatDoNotEnter({
-          ...prev,
-          revokeReasons: reasons,
-        }),
-      };
-      appendSignalEvent({
-        type: "revoke",
+    const issuedMs = Date.parse(prev.issuedAt ?? "");
+    const ageMin = Number.isFinite(issuedMs) ? (nowMs - issuedMs) / 60000 : 0;
+    const maxTrackMin = numEnv("XAU_MAX_TRACK_MINUTES", 45);
+
+    /** 1. Check Target 1 hit */
+    const tp1Hit =
+      Number.isFinite(tp1) && ((dir === "long" && mid >= tp1) || (dir === "short" && mid <= tp1));
+
+    /** 2. Check Stop hit */
+    const stopHit =
+      Number.isFinite(stop) && ((dir === "long" && mid <= stop) || (dir === "short" && mid >= stop));
+
+    /** 3. Check Adverse / Reversal against trade */
+    const reversal = detectAdverseReversal({
+      prev,
+      mid,
+      bestMid,
+      levels,
+      formingM5,
+      isNew5mBar,
+    });
+
+    /** 4. Check if price moved into profit outside the entry zone ("Hold if in, don't chase if out") */
+    const holdBufferUsd = numEnv("XAU_HOLD_FAVORABLE_BUFFER_USD", 0.75);
+    const movedFavorable =
+      (dir === "long" && mid > hi + holdBufferUsd) ||
+      (dir === "short" && mid < lo - holdBufferUsd);
+
+    if (tp1Hit) {
+      watchRevoked = buildUpdateEvent({
+        prev,
         ts,
-        direction: prev.direction,
-        entryLow: prev.entryLow,
-        entryHigh: prev.entryHigh,
-        stop: prev.stop,
-        tp1: prev.tp1,
-        tp2: prev.tp2 ?? null,
-        reasons,
-        mid: market?.mid ?? levels?.mid ?? null,
-        spread: market?.spread ?? null,
-        chatDoNotEnter: watchRevoked.chatDoNotEnter,
+        mid,
+        market,
+        eventType: "tp1_hit",
+        reasons: [`Target 1 ($${tp1}) reached`],
       });
       clearActiveWatch();
-      const issuedMs = Date.parse(prev.issuedAt ?? "");
-      const livedSec =
-        Number.isFinite(issuedMs) ? (nowMs - issuedMs) / 1000 : 999;
-      const flopSec = numEnv("XAU_WATCH_FLOP_SEC", 120);
-      const flopCooldownSec = numEnv("XAU_WATCH_FLOP_COOLDOWN_SEC", 600);
-      if (livedSec < flopSec && reasons.some((r) => r.includes("zone"))) {
-        setCooldownFromNow(ts, flopCooldownSec);
+      setCooldownFromNow(ts, 120);
+    } else if (stopHit) {
+      watchRevoked = buildUpdateEvent({
+        prev,
+        ts,
+        mid,
+        market,
+        eventType: "stop_broken",
+        reasons: [`Stop loss ($${stop}) reached`],
+      });
+      clearActiveWatch();
+      setCooldownFromNow(ts, 300);
+    } else if (reversal.isReversing && !prev.reversalWarned) {
+      watchRevoked = buildUpdateEvent({
+        prev,
+        ts,
+        mid,
+        market,
+        eventType: "reversal_warning",
+        reasons: [reversal.detail || "price turning against trade"],
+        adverseDetail: reversal.detail,
+      });
+      /** Keep tracking for stop/TP1 or clear if it never left the entry zone */
+      const everInProfit =
+        (dir === "long" && bestMid > hi + holdBufferUsd) ||
+        (dir === "short" && bestMid < lo - holdBufferUsd);
+      if (everInProfit) {
+        writeActiveWatch({
+          ...prev,
+          bestMid,
+          phase: "REVERSAL_WARNED",
+          reversalWarned: true,
+          lastWarningDetail: reversal.detail,
+        });
       } else {
-        setCooldownFromNow(ts);
+        clearActiveWatch();
+        setCooldownFromNow(ts, 240);
       }
-    } else if (
-      tradePlan?.actionableWatch &&
-      fp &&
-      prev.fingerprint &&
-      !fpEqual(fp, prev.fingerprint)
-    ) {
-      /** Price band moved — update stored plan silently (no cancel + re-alert spam). */
+    } else if (movedFavorable && !prev.holdNotified) {
+      watchRevoked = buildUpdateEvent({
+        prev,
+        ts,
+        mid,
+        market,
+        eventType: "hold_favorable",
+        reasons: ["moved in favor above/below entry zone — hold if in, do not chase if out"],
+      });
       writeActiveWatch({
         ...prev,
-        issuedAt: prev.issuedAt,
-        entryLow: fp.entryLow,
-        entryHigh: fp.entryHigh,
-        stop: fp.stop,
-        tp1: fp.tp1,
-        tp2: fp.tp2,
-        fingerprint: fp,
-        chatDraft: tradePlan.chatDraft ?? null,
+        bestMid,
+        phase: "HOLD_FAVORABLE",
+        holdNotified: true,
+      });
+    } else if (ageMin > maxTrackMin) {
+      watchRevoked = buildUpdateEvent({
+        prev,
+        ts,
+        mid,
+        market,
+        eventType: "expired",
+        reasons: [`setup tracking expired after ${Math.round(ageMin)} min`],
+      });
+      clearActiveWatch();
+    } else {
+      /** Continue tracking silently; update bestMid */
+      writeActiveWatch({
+        ...prev,
+        bestMid,
       });
     }
   }
 
+  const currentAfterUpdate = readActiveWatch();
   const revokedThisTick = watchRevoked != null;
 
   if (tradePlan?.actionableWatch && fp && !revokedThisTick) {
@@ -274,30 +470,22 @@ export function updateWatchTracking({
       watchSuppressed = {
         reason: "cooldown",
         until: new Date(cooldownUntilMs).toISOString(),
-        note: "No new watch alerts until cooldown ends (after last stand-down).",
+        note: "No new watch alerts until cooldown ends.",
       };
     } else if (levels?.breakoutAboveResistance && fp.direction === "short") {
       watchSuppressed = {
         reason: "breakout",
         note: "Short watch suppressed — price above resistance (breakout).",
       };
+    } else if (!currentAfterUpdate?.active) {
+      issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone });
+      newWatchIssued = true;
     } else {
-      const current = readActiveWatch();
-      const sameAsActive =
-        current?.active &&
-        fpEqual(fp, current.fingerprint) &&
-        current.inZone === inZone &&
-        current.bucket5m === bucket5m;
-      if (!sameAsActive && !current?.active) {
-        issueWatch({ tradePlan, levels, bucket5m, ts, market, fp, inZone });
-        newWatchIssued = true;
-      } else if (current?.active && !newWatchIssued) {
-        watchSuppressed = {
-          reason: "already_active",
-          issuedAt: current.issuedAt,
-          note: "Same watch already active on this 5m bar — do not re-paste draft every 60s.",
-        };
-      }
+      watchSuppressed = {
+        reason: "already_active",
+        issuedAt: currentAfterUpdate.issuedAt,
+        note: "Trade idea already active — tracking hold/reversal/TP/stop.",
+      };
     }
   }
 

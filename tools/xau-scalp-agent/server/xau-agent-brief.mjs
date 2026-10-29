@@ -20,12 +20,45 @@ function next5mUtcIso(ts) {
   return next.toISOString().slice(11, 16) + " UTC";
 }
 
+function formatActiveTradeGuidance(aw, mid) {
+  if (!aw?.active) return null;
+  const Dir = aw.direction === "short" ? "Sell" : "Buy";
+  const dir = aw.direction === "short" ? "sell" : "buy";
+  const m = mid != null ? `~$${Math.round(Number(mid) * 100) / 100}` : "current price";
+  const lines = [
+    `**Tracked ${Dir} setup** (zone **$${aw.entryLow}–$${aw.entryHigh}**, stop **$${aw.stop}**, Target 1 **$${aw.tp1}**${aw.tp2 ? `, Target 2 **$${aw.tp2}**` : ""}; price now **${m}**):`,
+  ];
+
+  if (aw.phase === "REVERSAL_WARNED") {
+    lines.push(
+      `- **If you ALREADY entered:** **Caution — price showed reversal pressure** (${aw.lastWarningDetail || "momentum turning against trade"}). Tighten your stop to break-even or exit if structure breaks; do not let it hit full stop (**$${aw.stop}**).`,
+    );
+    lines.push(`- **If you did NOT enter:** **Do not enter** this ${dir} now.`);
+  } else if (aw.phase === "HOLD_FAVORABLE") {
+    lines.push(
+      `- **If you ALREADY entered in $${aw.entryLow}–$${aw.entryHigh}:** **Stay in / hold** toward **Target 1 ($${aw.tp1})** with stop at **$${aw.stop}** (or lock break-even). We will alert you if price reverses against you or hits Target 1.`,
+    );
+    lines.push(
+      `- **If you did NOT enter:** **Do not chase late at ${m}** — wait for a pullback into zone or the next setup.`,
+    );
+  } else {
+    lines.push(
+      `- **If you did NOT enter:** You can only enter inside **$${aw.entryLow}–$${aw.entryHigh}** if the live chart confirms; skip if price runs away.`,
+    );
+    lines.push(
+      `- **If you ALREADY entered:** Hold toward **Target 1 ($${aw.tp1})** with stop at **$${aw.stop}**. We will alert you if price turns against you.`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** @param {object} ctx context.json */
 export function formatUserBrief(ctx) {
   if (!ctx) return "**Gold (XAU)** — loop not running yet. Start `run-agent-loop.sh`.";
 
   const m5 = ctx.m5?.c;
   const m15 = ctx.m15?.c;
+  const mid = ctx.levels?.mid ?? ctx.dataIntegrity?.m5Mid ?? m5;
   const spread = ctx.m5?.spread ?? ctx.m15?.spread;
   const adx = ctx.m5?.adx;
   const rsi = ctx.m5?.rsi;
@@ -58,33 +91,30 @@ export function formatUserBrief(ctx) {
   }
 
   if (ctx.watchRevoked?.notify && ctx.watchRevoked?.chatDoNotEnter) {
-    lines.push("**No trade — last alert was cancelled.**");
+    lines.push("**Trade update**");
     lines.push("");
     lines.push(ctx.watchRevoked.chatDoNotEnter);
     lines.push("");
-    lines.push(`Price now: **~$${m5 ?? "?"}**`);
-    lines.push("Wait for a **new** phone/chat alert before acting.");
+    lines.push(`5m price now: **~$${m5 ?? "?"}** · Next 5m close: **~${next5mUtcIso(ts)}**`);
     return lines.join("\n");
   }
 
-  if (tp.actionableWatch && tp.chatDraft && !ctx.watchSuppressed) {
+  if (ctx.newWatchIssued && tp.actionableWatch && tp.chatDraft && !ctx.watchSuppressed) {
     lines.push("**Get ready — possible setup.**");
     lines.push("");
-    lines.push("Check the live chart. Only trade if it still makes sense; skip if price ran away.");
+    lines.push("Check the live chart. Only trade inside the zone if it still makes sense; skip if price ran away.");
     lines.push("");
     lines.push(tp.chatDraft);
     return lines.join("\n");
   }
 
-  if (tp.chatEnterTemplate && tp.hasFreshSignal) {
-    lines.push("**Strong setup on paper — still your call on MT5.**");
+  if (ctx.activeWatch?.active) {
+    lines.push(formatActiveTradeGuidance(ctx.activeWatch, mid));
     lines.push("");
-    lines.push(tp.chatEnterTemplate);
-    return lines.join("\n");
+  } else {
+    lines.push("**Do nothing for now (no active trade setup).**");
+    lines.push("");
   }
-
-  lines.push("**Do nothing for now.**");
-  lines.push("");
 
   const plain = [];
   if (levels.inSupportZone) {
@@ -92,14 +122,14 @@ export function formatUserBrief(ctx) {
   } else if (levels.inResistanceZone) {
     plain.push(`Price **~$${m5 ?? "?"}** is near **resistance ~$${levels.nearestResistance}**.`);
   } else {
-    plain.push(`Price **~$${m5 ?? "?"}** — not in a tight buy/sell zone.`);
+    plain.push(`Price **~$${m5 ?? "?"}** — between support and resistance.`);
   }
 
   const block = simplifyPlanBlockReason(primary.reason);
   if (block) {
     plain.push(block);
   } else if (!primary.ok && primary.meetsMinRR === false) {
-    plain.push("Reward vs risk is too small for a plan.");
+    plain.push("Reward vs risk is too small for a new scalp.");
   }
 
   if (levels.breakoutAboveResistance) {
@@ -118,7 +148,9 @@ export function formatUserBrief(ctx) {
 
   lines.push("");
   lines.push(`Next 5m candle close: **~${next5mUtcIso(ts)}**.`);
-  lines.push("Trade only after a **Get ready** alert with zone, stop, and target.");
+  if (!ctx.activeWatch?.active) {
+    lines.push("Trade only after a **Get ready** alert with zone, stop, and target.");
+  }
 
   if (news.nextHighImpact?.title && news.nextHighImpact.minutesUntil != null) {
     const m = news.nextHighImpact.minutesUntil;

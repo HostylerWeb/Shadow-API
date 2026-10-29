@@ -29,10 +29,16 @@ function isHeikinAshiSeries(tf) {
   if (midVal == null) return false;
   const ohlcMax = numEnv("XAU_QUOTE_OHLC_MAX_USD", 3);
   if (Math.abs(midVal - tf.c) <= ohlcMax) return false;
-  /** Standard candle: mid is outside C, so legend is frozen. Heikin Ashi: mid is inside [L, H] and C is near (O+H+L+mid)/4. */
-  const inRange = midVal >= tf.l - 0.5 && midVal <= tf.h + 0.5;
+  /**
+   * Standard candle: mid is outside C only when legend is frozen (usually outside [L, H] too).
+   * Heikin Ashi: HA_Close = (Real_O + Real_H + Real_L + mid)/4, while tf.o is HA_Open (prior bar midpoint).
+   * During fast 15m trend bars, HA_Open lags Real_O, so allow proportional range tolerance when mid is inside [L, H].
+   */
+  const range = Math.max(0, tf.h - tf.l);
+  const inRange = midVal >= tf.l - 1.0 && midVal <= tf.h + 1.0;
   const haApprox = (tf.o + tf.h + tf.l + midVal) / 4;
-  return inRange && Math.abs(tf.c - haApprox) <= 1.5;
+  const haTol = Math.max(2.5, range * 0.45);
+  return inRange && Math.abs(tf.c - haApprox) <= haTol;
 }
 
 /**
@@ -45,6 +51,8 @@ function isHeikinAshiSeries(tf) {
  * @param {object|null} [opts.prevM15]
  * @param {object|null} [opts.newM15]
  * @param {boolean} [opts.isNew15mBar]
+ * @param {string|null} [opts.prevTs]
+ * @param {string|null} [opts.nowTs]
  */
 export function assessDataIntegrity({
   m5,
@@ -55,17 +63,24 @@ export function assessDataIntegrity({
   prevM15 = null,
   newM15 = null,
   isNew15mBar = false,
+  prevTs = null,
+  nowTs = null,
 }) {
   const ohlcMax = numEnv("XAU_QUOTE_OHLC_MAX_USD", 3);
   const crossTfMax = numEnv("XAU_M15_M5_MID_MAX_USD", 8);
   const rollGapMax = numEnv("XAU_BAR_ROLL_CLOSE_OPEN_MAX_USD", 2.5);
   const rollGap15Max = numEnv("XAU_BAR15_ROLL_CLOSE_OPEN_MAX_USD", 4);
+  const pauseSpreadPts = numEnv("XAU_PAUSE_SPREAD_POINTS", 120);
 
   const issues = [];
   const o5 = ohlcValid(m5, "M5");
   const o15 = ohlcValid(m15, "M15");
   if (o5) issues.push(o5);
   if (o15) issues.push(o15);
+
+  if (m5?.spread != null && Number(m5.spread) >= pauseSpreadPts) {
+    issues.push(`Market paused or rollover — 5m spread ${m5.spread} pts`);
+  }
 
   const m5Mid = mid(m5);
   const m15Mid = mid(m15);
@@ -94,6 +109,11 @@ export function assessDataIntegrity({
     issues.push(`M5 vs M15 mid delta $${Math.abs(m5Mid - m15Mid).toFixed(2)}`);
   }
 
+  const elapsedMin =
+    prevTs && nowTs ? (Date.parse(nowTs) - Date.parse(prevTs)) / 60000 : null;
+  const isResumedAfterPause5m = elapsedMin != null && elapsedMin > 12;
+  const isResumedAfterPause15m = elapsedMin != null && elapsedMin > 25;
+
   let m5ArchiveOk = true;
   let m5ArchiveNote = null;
   if (isNew5mBar && prevM5 && newM5) {
@@ -105,6 +125,7 @@ export function assessDataIntegrity({
       m5ArchiveOk = false;
       m5ArchiveNote = "barKey unchanged at 5m roll";
     } else if (
+      !isResumedAfterPause5m &&
       !isHeikinAshiSeries(prevM5) &&
       !isHeikinAshiSeries(newM5) &&
       prevM5.c != null &&
@@ -127,6 +148,7 @@ export function assessDataIntegrity({
       m15ArchiveOk = false;
       m15ArchiveNote = "barKey unchanged at 15m roll";
     } else if (
+      !isResumedAfterPause15m &&
       !isHeikinAshiSeries(prevM15) &&
       !isHeikinAshiSeries(newM15) &&
       prevM15.c != null &&

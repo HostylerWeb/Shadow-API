@@ -151,6 +151,8 @@ export async function runXauTick({ started = Date.now() } = {}) {
     prevM15: isNew15mBar ? prev?.m15 : null,
     newM15: payload.m15,
     isNew15mBar,
+    prevTs: prev?.ts ?? null,
+    nowTs: nowIso,
   });
 
   if (isNew5mBar && prev?.m5 && dataIntegrity.m5ArchiveOk) {
@@ -206,8 +208,11 @@ export async function runXauTick({ started = Date.now() } = {}) {
   const news = readNewsCalendar();
 
   const lastArchivedM5 = readLastJsonlLine(getBars5mPath());
+  const lastArchivedAgeMin =
+    lastArchivedM5?.ts ? (Date.parse(nowIso) - Date.parse(lastArchivedM5.ts)) / 60000 : 999;
+  /** Keep the most recent closed 5m candle active for structure/triggers throughout the current 5m bar. */
   const closedM5ForLevels =
-    isNew5mBar && dataIntegrity.m5ArchiveOk ? lastArchivedM5 : null;
+    lastArchivedM5 && lastArchivedAgeMin <= 10 ? lastArchivedM5 : null;
   const levels = computeLevelsContext({
     bars5mPath: getBars5mPath(),
     bars15mPath: getBars15mPath(),
@@ -233,6 +238,7 @@ export async function runXauTick({ started = Date.now() } = {}) {
     bucket5m,
     ts: nowIso,
     dataIntegrity,
+    formingM5: payload.m5,
     market: {
       mid: levels?.mid ?? null,
       spread: payload.m5?.spread ?? null,

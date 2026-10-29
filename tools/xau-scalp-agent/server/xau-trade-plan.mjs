@@ -23,6 +23,8 @@ function planLong({ closedBar, formingM5, levels, limits, signal }) {
   const slip = limits.maxSlippageUsd ?? 2.5;
   const minRR = limits.minNetRR ?? 1.5;
   const maxStopMult = limits.maxStopAtrMult ?? 1.2;
+  const maxScalpTp1RR = 2.6;
+  const defaultScalpTp1RR = 1.8;
 
   const support = levels?.nearestSupport ?? closedBar?.l;
   const entryLow = round2(
@@ -61,36 +63,55 @@ function planLong({ closedBar, formingM5, levels, limits, signal }) {
   const spread = spreadUsd(formingM5);
   const netRisk = stopDist + spread;
 
+  const swingHighPrices = Array.isArray(levels?.swings?.highs)
+    ? levels.swings.highs.map((s) => s?.price)
+    : [];
   const resistances = [
     levels?.nearestResistance,
-    levels?.sources?.m5RangeHigh,
+    ...swingHighPrices,
     levels?.sources?.m15LastHigh,
-  ].filter((x) => x != null && x > entryHigh);
+    levels?.sources?.m5RangeHigh,
+  ]
+    .filter((x) => x != null && Number.isFinite(x) && x > entryHigh)
+    .filter((v, idx, arr) => arr.findIndex((y) => Math.abs(y - v) < 0.05) === idx);
 
   resistances.sort((a, b) => a - b);
 
-  let tp1 = null;
+  let structuralTp = null;
   for (const r of resistances) {
     const reward = r - entryHigh - spread;
     if (netRisk > 0 && reward / netRisk >= minRR) {
-      tp1 = round2(r);
+      structuralTp = round2(r);
       break;
     }
   }
-  if (tp1 == null && netRisk > 0) {
+
+  let tp1 = structuralTp;
+  let tp2 = null;
+
+  if (tp1 != null && netRisk > 0) {
+    const structRR = (tp1 - entryHigh - spread) / netRisk;
+    if (structRR > maxScalpTp1RR) {
+      /** Structural level is very far (e.g. $25–$30 away); set realistic scalp TP1 and keep structure as TP2. */
+      tp2 = tp1;
+      tp1 = round2(entryHigh + defaultScalpTp1RR * netRisk + spread);
+    }
+  } else if (netRisk > 0) {
     tp1 = round2(entryHigh + minRR * netRisk + spread);
   }
 
   const netRRtp1 =
     tp1 != null && netRisk > 0 ? round2((tp1 - entryHigh - spread) / netRisk) : null;
 
-  const tp2Candidates = resistances.filter((r) => tp1 != null && r > tp1 + 0.1);
-  const tp2 =
-    tp2Candidates.length > 0
-      ? round2(tp2Candidates[0])
-      : tp1 != null
-        ? round2(tp1 + (tp1 - entryHigh))
-        : null;
+  if (tp2 == null) {
+    const tp2Candidates = resistances.filter((r) => tp1 != null && r > tp1 + 0.25);
+    tp2 =
+      tp2Candidates.length > 0
+        ? round2(tp2Candidates[0])
+        : tp1 != null
+          ? round2(tp1 + (tp1 - entryHigh))
+          : null;
+  }
 
   const meetsMinRR = netRRtp1 != null && netRRtp1 >= minRR;
 
@@ -119,6 +140,8 @@ function planShort({ closedBar, formingM5, levels, limits, signal }) {
   const slip = limits.maxSlippageUsd ?? 2.5;
   const minRR = limits.minNetRR ?? 1.5;
   const maxStopMult = limits.maxStopAtrMult ?? 1.2;
+  const maxScalpTp1RR = 2.6;
+  const defaultScalpTp1RR = 1.8;
 
   const resistance = levels?.nearestResistance ?? closedBar?.h;
   const entryHigh = round2(
@@ -153,35 +176,53 @@ function planShort({ closedBar, formingM5, levels, limits, signal }) {
   const spread = spreadUsd(formingM5);
   const netRisk = stopDist + spread;
 
+  const swingLowPrices = Array.isArray(levels?.swings?.lows)
+    ? levels.swings.lows.map((s) => s?.price)
+    : [];
   const supports = [
     levels?.nearestSupport,
-    levels?.sources?.m5RangeLow,
+    ...swingLowPrices,
     levels?.sources?.m15LastLow,
-  ].filter((x) => x != null && x < entryLow);
+    levels?.sources?.m5RangeLow,
+  ]
+    .filter((x) => x != null && Number.isFinite(x) && x < entryLow)
+    .filter((v, idx, arr) => arr.findIndex((y) => Math.abs(y - v) < 0.05) === idx);
   supports.sort((a, b) => b - a);
 
-  let tp1 = null;
+  let structuralTp = null;
   for (const s of supports) {
     const reward = entryLow - s - spread;
     if (netRisk > 0 && reward / netRisk >= minRR) {
-      tp1 = round2(s);
+      structuralTp = round2(s);
       break;
     }
   }
-  if (tp1 == null && netRisk > 0) {
+
+  let tp1 = structuralTp;
+  let tp2 = null;
+
+  if (tp1 != null && netRisk > 0) {
+    const structRR = (entryLow - tp1 - spread) / netRisk;
+    if (structRR > maxScalpTp1RR) {
+      tp2 = tp1;
+      tp1 = round2(entryLow - defaultScalpTp1RR * netRisk - spread);
+    }
+  } else if (netRisk > 0) {
     tp1 = round2(entryLow - minRR * netRisk - spread);
   }
 
   const netRRtp1 =
     tp1 != null && netRisk > 0 ? round2((entryLow - tp1 - spread) / netRisk) : null;
 
-  const tp2Candidates = supports.filter((s) => tp1 != null && s < tp1 - 0.1);
-  const tp2 =
-    tp2Candidates.length > 0
-      ? round2(tp2Candidates[0])
-      : tp1 != null
-        ? round2(tp1 - (entryLow - tp1))
-        : null;
+  if (tp2 == null) {
+    const tp2Candidates = supports.filter((s) => tp1 != null && s < tp1 - 0.25);
+    tp2 =
+      tp2Candidates.length > 0
+        ? round2(tp2Candidates[0])
+        : tp1 != null
+          ? round2(tp1 - (entryLow - tp1))
+          : null;
+  }
 
   const meetsMinRR = netRRtp1 != null && netRRtp1 >= minRR;
 
@@ -246,8 +287,8 @@ export function buildTradePlans({
     Boolean(primary?.ok) &&
     (Boolean(levels?.consider?.longAtSupport) ||
       Boolean(levels?.consider?.shortAtResistance) ||
-      Boolean(levels?.closedBar?.bounceAtSupport) ||
-      Boolean(levels?.closedBar?.rejectionAtResistance));
+      (levels?.inSupportZone && Boolean(levels?.closedBar?.bounceAtSupport)) ||
+      (levels?.inResistanceZone && Boolean(levels?.closedBar?.rejectionAtResistance)));
 
   const hasFreshSignal = Boolean(isNew5mBar && signal && !signal.alreadyProcessed);
 
@@ -268,7 +309,7 @@ export function buildTradePlans({
     primary,
     chatEnter: null,
     chatEnterTemplate:
-      hasFreshSignal && primary?.meetsMinRR
+      hasFreshSignal && actionableWatch && primary?.meetsMinRR
         ? formatTradePlanChat(primary, { draft: false })
         : null,
     chatDraft: actionableWatch ? formatTradePlanChat(primary, { draft: true }) : null,
